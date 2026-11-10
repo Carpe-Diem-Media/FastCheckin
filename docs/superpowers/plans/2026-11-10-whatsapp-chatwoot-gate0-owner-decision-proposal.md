@@ -3,14 +3,14 @@
 | Field | Value |
 |---|---|
 | Document ID | FASTCHECK-WA-CHATWOOT-GATE0-DECISION-001 |
-| Version | 0.1.1 |
+| Version | 0.1.2 |
 | Date prepared | 2026-11-10 |
 | Status | PROPOSED — UNSIGNED |
 | Repository baseline | `e5ec24e53d44b0cebd472c1a05f138f314bb337f` |
 | Architecture reference | `docs/superpowers/specs/2026-11-10-whatsapp-flows-chatwoot-integration-design.md`, v0.2.3, Proposed |
 | Plan reference | `docs/superpowers/plans/2026-10-15-whatsapp-customer-service-resend.md`, approved plan plus proposed Chatwoot appendix |
 | Candidate spec Git blob | `953d9d77eca1afbc6405cd032eac5619dbbf6e29` |
-| Candidate plan Git blob | `a760686378ca8899188f06815757f3dfa1f021a9` |
+| Candidate plan Git blob | `a77a0842c3d8cd93ff76e6c5f6ee176d76f6220f` |
 | Superseded proposal Git blob | `8d722a91fcc0ea7fc841ae3feda8274d1074168b` |
 | Implementation authorization | NO |
 | Effective date | Pending owner approval |
@@ -22,6 +22,7 @@
 | Version | Change |
 |---|---|
 | 0.1.1 | Separates queued intent, fresh per-attempt consent authorization, Meta attempt start, and provider outcome; adds delayed-worker race acceptance criteria and records unresolved historical-consent and paid-ticket fulfillment decisions. H1 and H3 recommendations remain unchanged. |
+| 0.1.2 | Pins the exact CG-1-enabled plan blob, names CG-1 as the H2 outbound prerequisite, and clarifies the signed authority precedence for no-send Support Gate A feasibility work. |
 
 ## 1. Purpose and current authority
 
@@ -105,6 +106,8 @@ If those rules cannot be agreed without changing the existing commercial deliver
 ### 3.4 Shared outbound suppression and STOP/dispatch race
 
 The future implementation must enforce consent at the shared FastCheck WhatsApp outbound authorization boundary used by sales, support, resend, ticket/payment delivery, system notices, and retries. A Chatwoot-only check is insufficient. Chatwoot never sends directly to Meta.
+
+Upon signed H2 approval, Global WhatsApp Consent Gate CG-1 is the mandatory implementation prerequisite for all new or modified WhatsApp outbound send paths. H2 approval does not itself authorize CG-1 implementation; CG-1 requires its separate gate authorization and must pass before any such send path is implemented or changed. Support Gate A may proceed independently only as an explicitly authorized no-send feasibility exercise.
 
 Keep these steps and records distinct:
 
@@ -195,6 +198,7 @@ If and only if H1, H2, and H3 are approved, the required policy fields are compl
 4. October 15 Gate A Tasks A1-A2, Gate B Tasks B1-B6, and Gate E Tasks E1-E3 remain in force as mapped in H1. This amendment does not change commercial, resend, navigation, sandbox, or Paystack authority.
 5. The prior proposed appendix is not independently effective. If it conflicts with this signed decision amendment, this amendment controls for H1-H3 and C/D precedence. The signed plan revision controls gate execution details within those approved decisions.
 6. Approval closes only Gate 0. No application changes, migrations, Chatwoot installation, Meta configuration, secrets, deployment, or production activity are authorized. Each next gate needs a separate written authorization.
+7. Upon signed H2 approval, Global WhatsApp Consent Gate CG-1 is the mandatory implementation prerequisite for all new or modified WhatsApp outbound send paths. Support Gate A may proceed independently only as an explicitly authorized no-send feasibility exercise.
 
 If any H decision is rejected, conditional, unsigned, or missing its required policy fields, none of the supersession clauses take effect. The October 15 plan remains the authority, current authorization remains Gate 0 only, and implementation must stop for owner direction.
 
