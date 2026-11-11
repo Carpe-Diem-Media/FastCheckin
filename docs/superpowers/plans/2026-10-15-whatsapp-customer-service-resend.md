@@ -1144,3 +1144,274 @@ all on exact verified code, with the sandbox gate disabled at the end.
 Use **subagent-driven development** for this programme. Gate B (resend identity/security) and Gates C/D (human support authorization, PII, concurrency, provider delivery) are high-cost failure domains where an independent fresh reviewer after every task is worth the extra context. Do not let one agent implement all gates before review.
 
 Gate 0 is authorized. Gates A-E remain unauthorized until the preceding gate is reviewed, merged, and post-merge CI is accepted.
+
+
+# Proposed Chatwoot amendment for Gate 0 review
+
+- **Status:** PROPOSED; owner decisions required
+- **Authority effect:** None until the owner approves and signs a revised plan
+- **Implementation authorization:** NO
+- **Architecture reference:** `docs/superpowers/specs/2026-11-10-whatsapp-flows-chatwoot-integration-design.md`, v0.2.3, Proposed
+
+This appendix prepares a replacement plan for the human-support workspace. It does not edit or revoke the approved October 15 specification or the task definitions above. Until the owner signs this amendment, the October 15 tasks remain controlling and the only current authorization remains Gate 0. No support implementation gate below is authorized by adding this appendix.
+
+## Owner approval decisions
+
+The owner must complete these decisions before Gate 0 can close. Record the owner, date, decision, and exact spec/plan revisions. A blank or conditional response leaves Gate 0 open.
+
+### Decision H1: support workspace and task replacement
+
+**Proposed decision:** Approve Option A. FastCheck remains the only Meta webhook owner and WhatsApp sender and remains authoritative for routing, customer binding, orders, checkout, Paystack verification, inventory, tickets, and resend. Chatwoot API Inbox becomes the human-support workspace and transcript only after Support Gate A verifies the selected self-hosted Community Edition contract. Approve exactly the task dispositions in §15 of the v0.2.3 design. Keep the October navigation and email-first resend tasks unchanged.
+
+Select one:
+
+- [ ] Approve the proposed Option A task matrix.
+- [ ] Reject it; the October 15 custom-support tasks remain unchanged.
+- [ ] Return it for revision and list the required changes.
+
+Approval does not authorize application implementation, Chatwoot installation, Meta changes, or deployment. Each later gate requires a separate authorization.
+
+### Decision H2: global STOP and opt-out semantics
+
+**Proposed decision:** STOP is classified before support or Sales routing and is never stored or forwarded as support content. The implementation must call the exact owner-approved global privacy/consent authority. The current source has state-specific `:stop` handling but no separate persisted opt-out record; this plan does not invent consent persistence or re-subscription behavior.
+
+The owner must identify the controlling policy and source path, then record:
+
+- whether STOP ends only the current support conversation or also records a persistent consent/marketing opt-out;
+- the authoritative persistence field/resource and the actor allowed to clear or change it;
+- which outbound messages are suppressed, including support replies, retries, and system notices;
+- whether a confirmation is permitted, its approved content/channel constraints, and whether it can be sent outside the customer-service window;
+- the re-subscription or re-consent action, if applicable; and
+- how existing held content is retained or erased under the approved privacy rule.
+
+Choose one:
+
+- [ ] Approve the identified existing authority and record its exact path and behavior above.
+- [ ] No applicable authority exists; commission a separate owner-approved privacy decision before any STOP-related application work.
+- [ ] Reject the proposed routing rule and provide the replacement authority.
+
+Until resolved, do not implement STOP, opt-out, confirmation, or re-subscription changes. Keep Sales suppressed for a nonterminal handoff and do not let a missing handler route STOP into Sales.
+
+### Decision H3: held customer messages on support exit
+
+**Proposed decision:** No held customer message is silently dropped or delivered to a different support episode without owner approval, and no message is used to reopen Sales. The owner must choose the disposition independently for customer exit (`0`/`#`) and STOP, subject to the STOP policy in H2.
+
+For each trigger, select one approved disposition:
+
+- [ ] Deliver the held messages to the currently bound Chatwoot episode before terminalization.
+- [ ] Carry the same BridgeMessage records into a successor episode under an approved reopen rule.
+- [ ] Cancel the held messages under an approved privacy/retention rule. Specify deletion timing and any permitted customer notice; STOP suppression controls whether a notice can be sent.
+- [ ] Other owner-specified disposition: ____________________________________
+
+| Trigger | Selected disposition | Notice/retention conditions |
+|---|---|---|
+| Customer exit (`0`/`#`) | Pending owner decision | Pending owner decision |
+| STOP after H2 handler | Pending owner decision | Pending owner decision |
+
+Until both rows are approved, keep the messages encrypted and the handoff nonterminal. The owner may select an authorized deletion outcome if the controlling privacy rule requires it; the implementation must record that outcome before terminalization.
+
+## Proposed support gate sequence
+
+These gates are named `Support Gate` to distinguish them from the October plan's Gate A navigation work and Gate B resend work. All statuses below are **PROPOSED / NOT AUTHORIZED**. A signed plan revision and separate owner authorization are required before work in any gate begins.
+
+### Support Gate 0: authority and plan adoption
+
+**Outcome:** The owner has completed H1-H3, approved the precise task matrix in §15 of the design, and signed a revised plan that preserves the October authority as history. No code, migrations, infrastructure, Meta settings, or production state changes occur in this gate.
+
+**Files:**
+
+- Review: `docs/superpowers/specs/2026-11-10-whatsapp-flows-chatwoot-integration-design.md`
+- Review: `docs/superpowers/plans/2026-10-15-whatsapp-customer-service-resend.md`
+- Any approved authority record: owner-selected documentation path, named before approval
+
+**Acceptance:** H1, H2, and both H3 rows are recorded; every affected October task ID has an approved disposition; current Gate 0-only authorization is explicitly replaced or reaffirmed by the owner. The approval record names the next separately authorized gate.
+
+**STOP:** `STOP=OWNER_POLICY_DECISION_REQUIRED`, `STOP=AUTHORITY_CONFLICT_UNRESOLVED`, `STOP=MAIN_MOVED`, `STOP=NON_DOC_SCOPE`.
+
+### Support Gate A: pinned Chatwoot contract feasibility
+
+**Dependency:** Support Gate 0 approval and separate authorization to use an isolated disposable environment. This gate makes no FastCheck application change and no Meta configuration change.
+
+**Files/evidence:**
+
+- Create: `docs/fastcheck_sales/runbooks/WHATSAPP_CHATWOOT_FEASIBILITY.md`
+- Store sanitized request/response fixtures, if approved: `test/fixtures/chatwoot_api_inbox/`
+- Do not store tokens, secrets, customer identifiers, or unsanitized transcripts in fixtures.
+
+**Acceptance outcomes:** Pin the self-hosted Community Edition release and record the exact license/feature basis. Prove the API Inbox contact/conversation/message flow, callback authentication, sender/public/private classification, duplicate and retry behavior, timeout reconciliation, source-message read-back/order completeness through close, resolution/assignment behavior, token rights, retention, backup/restore, and operational API limits. Record a fixture and an observed pass/fail for each question in design §11. Do not infer callback behavior from account-webhook documentation.
+
+**Performance/scaling:** Record observed request limits and latency for the pinned release. Do not invent vendor quotas. Select bounded request concurrency and timeout/retry policy from observed behavior, with retry only after verified non-acceptance. Keep evidence small and sanitized.
+
+**STOP:** `STOP=VENDOR_API_UNVERIFIED`, `STOP=LICENSE_OR_ACCESS_UNRESOLVED`, `STOP=AMBIGUOUS_CREATE_UNRECONCILABLE`, `STOP=CLOSE_READBACK_INCOMPLETE`, `STOP=CALLBACK_AUTH_UNVERIFIED`, `STOP=CAPACITY_UNPROVEN`.
+
+### Global WhatsApp Consent Gate CG-1: durable recipient consent and shared outbound authorization
+
+**Status:** Proposed only; not authorized. This is a distinct, independently reviewed implementation gate for the H2 policy. It does not change the October task history or authorize any sender behavior before H2 is approved.
+
+**Ownership:** Accountable workstream: FastCheck WhatsApp/backend. The signed task authorization must name the implementer and a separate independent reviewer before work starts. Before CG-1 development, the business policy owner must approve the H2 implementation rules and protected consent data model required by the Dependency below. Release-only H2 decisions may remain pending during synthetic-only development, but their affected data processing or send paths must stay disabled. The implementer must not choose policy values.
+
+**Dependency:** Before CG-1 development, Gate 0 must be formally signed; the owner must approve the H2 implementation rules for STOP identity matching and state effects, bounded customer-initiated service replies, category-specific `opted_in` eligibility, and fail-closed administrative recovery; and the protected consent resource and recipient-identity representation must be recorded. CG-1 also requires separate owner authorization and one reviewable PR. Use synthetic data only during implementation and testing. Do not process real recipient personal data or make live customer sends in this gate. Release-only H2 decisions, including the privacy basis and applicable retention/minimization rules, may remain pending during synthetic-only development. Before any production collection or processing of real recipient personal data, the owner must approve the privacy basis and applicable retention/minimization rules for the affected data. Keep any affected send path disabled until its category eligibility is approved. Support Gate A may run independently only with separate authorization and no customer send. Historical customer migration is a pre-release condition, not a development prerequisite: before enabling live WhatsApp messages, inventory the verified launch environment and classify recipient records using documented provenance. If the verified inventory establishes that no genuine pre-existing customer recipients exist, historical evidence migration is N/A. If any genuine recipient exists, or provenance cannot establish whether a record is a test contact or a genuine recipient, stop release until the owner approves the historical evidence/migration rule and any required migration is completed and independently reviewed. A nonzero raw row count alone does not prove a genuine customer; sandbox/test records may be excluded only with documented provenance. The new Postgres consent schema migration remains required in all cases. CG-1 implements the shared authorization for existing send paths; no other gate may add or alter a WhatsApp send path until CG-1 passes.
+
+**Purpose and scope:** Persist consent by the FastCheck business WhatsApp number and verified recipient identity, across events and support episodes. Postgres is the durable authority. A normal inbound message, purchase, new event conversation, Chatwoot state, or event-level Sales flag cannot grant consent or override an opt-out. STOP is processed before Sales/support routing. A repeated STOP is idempotent; STOP during `reconsent_pending` cancels the pending re-consent attempt and returns the recipient to the durable `opted_out` state. Re-consent, categories, customer confirmation, and retention follow only the signed H2 policy. No confirmation or category exception is inferred.
+
+**Proposed files and call paths** (confirm the final consent resource and migration names in the reviewed implementation proposal before coding):
+
+- Create `lib/fastcheck/consent.ex` and `lib/fastcheck/consent/whatsapp_consent.ex` for the durable consent authority, plus `priv/repo/migrations/<timestamp>_create_whatsapp_consents.exs`. The reviewed implementation proposal must confirm these paths and the protected recipient-identity representation before coding.
+- Create `lib/fastcheck/messaging/whatsapp/outbound_authorization.ex` as the shared authorization boundary. It must authorize every Meta text and template attempt immediately before transport invocation and fail closed when current consent cannot be established.
+- Modify or encapsulate `lib/fastcheck/messaging/whatsapp/client.ex` so application senders cannot bypass the shared authorization boundary. Keep this module as the Meta transport; it is not itself proof of consent.
+- Integrate STOP persistence/routing and bot replies in `lib/fastcheck/workers/whatsapp_inbound_worker.ex`.
+- Integrate payment-link sends in `lib/fastcheck/workers/send_whatsapp_payment_link_worker.ex`.
+- Integrate ticket delivery and verified resend sends in `lib/fastcheck/workers/send_whatsapp_ticket_link_worker.ex`; verified resend queues this worker through `lib/fastcheck/messaging/whatsapp/resend_delivery_flow.ex`.
+- Integrate support replies through `lib/fastcheck/workers/support_bridge_worker.ex` under Support Gate D. Gate D cannot pass before CG-1.
+- Create focused consent/authorization tests under `test/fastcheck/consent/` and `test/fastcheck/messaging/whatsapp/`; extend the existing sender and resend tests listed below.
+
+**Required lifecycle and enforcement:**
+
+- Implement the signed H2 state transitions and durable audit evidence. A duplicate delivery of the same STOP inbound event must not duplicate state effects. A distinct STOP while already opted out remains opted out. STOP during `reconsent_pending` invalidates that pending attempt and cannot restore any category.
+- Before live messaging, inventory the verified launch environment with read-only queries and documented provenance. Count genuine pre-existing customer recipients separately from sandbox/test contacts. Exclude a test contact only when its test/sandbox provenance is documented and reviewable; do not infer it from a nonzero count, phone number, or unverified label alone. If the verified genuine-recipient count is zero, record historical consent evidence migration as `N/A` for this greenfield launch. If any genuine recipient exists or provenance is ambiguous, stop release and obtain an owner-approved evidence/migration rule; do not send to those recipients until any required migration is implemented and independently reviewed. Missing, ambiguous, or unmapped evidence must never be bulk-classified as `opted_in`. Record sanitized counts and provenance outcomes without raw recipient identifiers.
+- Implement the additive Postgres consent schema migration in every case, including a verified zero-recipient environment. Keep historical data backfill conditional on the pre-release inventory and approved rule. Define a rollout path that remains safe with existing Oban jobs and mixed application versions. Jobs queued before rollout must pass the same current-consent check when they execute; they cannot carry forward a prior grant. Document rollback behavior so a missing consent row or restored snapshot cannot silently re-enable WhatsApp sends.
+- Route every text and template send from bot, payment, ticket, resend, and support through the same consent decision. A queued intent or previous worker authorization is not reusable permission. Each provider attempt, including a delayed job, restarted worker, retry, or re-enqueue, must obtain fresh consent authorization bound to that recipient, purpose/category, message intent, consent revision, and attempt.
+- Serialize consent updates and final per-attempt authorization for the same business-number/recipient scope. Invalidate or revision-check any cache on consent changes; the cache is an optimization only. If the system cannot prove the cached revision is current, read the durable authority or deny the attempt. Never let a stale cache authorize a send.
+- Preserve the documented non-atomic boundary: a STOP committed before final authorization blocks the attempt; a provider call already started cannot be recalled. Minimize the authorization-to-HTTP interval, reconcile accepted or ambiguous outcomes from provider evidence, and never retry an unknown or accepted attempt merely because STOP arrived.
+- No WhatsApp message category, template, active order, or support handoff bypasses an unqualified STOP. Do not change checkout, Paystack verification, inventory, ticket issuance, ticket/resend authority, or the required Sales.DeliveryAttempt-to-Sales-Order relationship. Do not invent an alternative ticket-delivery channel while its authority remains pending.
+
+**Focused test files and required outcomes:**
+
+- Create `test/fastcheck/consent/whatsapp_consent_test.exs`: transitions, audit/idempotency, repeated STOP, STOP during `reconsent_pending`, and denied re-consent after STOP.
+- Create `test/fastcheck/messaging/whatsapp/outbound_authorization_test.exs`: fresh per-attempt authorization, recipient/purpose/revision binding, expiry/restart/retry invalidation, cache invalidation/fail-closed behavior, and the authorization/HTTP race.
+- Extend `test/fastcheck/workers/whatsapp_inbound_worker_test.exs`: STOP commits before support/Sales routing; duplicate STOP does not duplicate state effects; no bot reply is sent when H2 disallows it.
+- Extend `test/fastcheck/workers/send_whatsapp_payment_link_worker_test.exs` and `test/fastcheck/workers/send_whatsapp_ticket_link_worker_test.exs`: opted-out and `unverified` recipients follow the approved policy for both text and template modes; queued and retried jobs revalidate; blocked sends do not mutate commercial state or claim provider acceptance.
+- Extend `test/fastcheck/messaging/whatsapp/resend_ticket_e2e_test.exs`: verified resend retains OTP, one-ticket binding, and ticket authority while WhatsApp authorization is independently enforced; no consent result changes order/ticket state.
+- Extend `test/fastcheck/messaging/whatsapp/client_test.exs` or the selected shared-boundary test: direct application send paths cannot bypass authorization, and only provider-started calls can produce provider outcome evidence.
+- Under Support Gate D, add the planned `test/fastcheck/workers/support_bridge_worker_test.exs` coverage: agent replies use the same guard and a STOP during queued delay suppresses the Meta call.
+- Race tests must pause a worker after a durable queue intent, commit STOP, resume it, and observe zero transport calls. A separate started-call test must show STOP cannot recall the call, blocks every later attempt, and leaves uncertain outcomes for reconciliation.
+- Consent schema migration tests are required in all cases. If historical recipients require migration, tests must prove that missing/ambiguous evidence never silently promotes a recipient to `opted_in` and that the approved category mapping is applied without cross-recipient or cross-event leakage. The release record must show either a verified zero-genuine-recipient inventory making historical migration N/A, or the approved migration and its test results.
+- Commercial regression outcomes must show orders, payments, inventory, tickets, resend challenges, and existing DeliveryAttempt invariants are unchanged when consent denies a send.
+
+**Performance and scaling:** Use a unique, indexed lookup for the approved business-number/recipient identity scope and bounded audit/migration queries. Do not scan recipient or order tables on every send. Any cache must carry a consent revision and have bounded storage; no TTL or latency budget is assumed here. Record query count and send-authorization latency under the owner-approved workload before certification. Keep concurrency controls durable and recipient-scoped; do not rely on Redis, ETS, or an Oban uniqueness window as the consent lock. Do not log raw recipient identifiers, message bodies, consent evidence, tokens, or provider payloads.
+
+**Acceptance:** The signed H2 policy is implemented as written; all enumerated send paths and retries use one fail-closed authorization boundary; repeated STOP and STOP during re-consent are idempotent and suppress sends; the additive consent schema migration passes in all cases; race and commercial regression tests pass; exact-head CI passes; and an independent reviewer verifies the complete call graph and schema migration before the gate is marked complete. Before any live messaging, the release record must also show either (a) a provenance-verified inventory of the launch environment with zero genuine pre-existing customer recipients, making historical evidence migration N/A, or (b) the separately owner-approved evidence/migration rule and its completed, reviewed migration. A nonzero raw database count of documented sandbox/test contacts does not alone block release. Any genuine recipient awaiting migration or any recipient whose provenance cannot be established blocks live release. Completion does not itself authorize deployment or production sends.
+
+**STOP:** `STOP=H2_POLICY_VALUE_PENDING`, `STOP=GENUINE_RECIPIENTS_REQUIRE_APPROVED_MIGRATION`, `STOP=RECIPIENT_PROVENANCE_UNVERIFIED`, `STOP=SEND_PATH_BYPASSES_AUTHORIZATION`, `STOP=STALE_CONSENT_CAN_AUTHORIZE`, `STOP=STOP_RECONSENT_RACE_UNTESTED`, `STOP=IN_FLIGHT_OUTCOME_MISSTATED`, `STOP=CONSENT_MIGRATION_IMPLICITLY_OPTS_IN`, `STOP=SALES_INVARIANT_CHANGE`, `STOP=TEST_OR_CI_FAILURE`, `STOP=INDEPENDENT_REVIEW_MISSING`.
+
+### Support Gate B: timestamp hardening and durable support records
+
+**Dependency:** Support Gate A passes, H2/H3 are recorded, and this gate is separately authorized. This gate changes FastCheck source only after authorization; it does not alter Sales delivery invariants.
+
+**Files:**
+
+- Modify: `lib/fastcheck/messaging/whatsapp/inbound_normalizer.ex`
+- Modify if needed to preserve timestamp provenance: `lib/fastcheck/messaging/whatsapp/message_command.ex`
+- Extend: `test/fastcheck/messaging/whatsapp/inbound_normalizer_test.exs`
+- Create: `lib/fastcheck/support.ex`
+- Create: `lib/fastcheck/support/support_handoff.ex`
+- Create: `lib/fastcheck/support/bridge_message.ex`
+- Create migration: `priv/repo/migrations/<timestamp>_create_support_handoffs_and_bridge_messages.exs`
+- Create/extend: `test/fastcheck/support/support_handoff_test.exs`
+- Create/extend: `test/fastcheck/support/bridge_message_test.exs`
+
+**Required timestamp regression:** The current normalizer calls `DateTime.from_unix!/1` for any syntactically valid parsed integer. An out-of-range integer can raise inside `received_at/1`; `normalize/2` then rescues the exception around the whole payload. Test supported boundary values, values outside both ends of the supported range, malformed/missing timestamps, and a mixed payload containing one invalid timestamp plus a valid sibling message. The hardened result must not let the exception escape per-message normalization or silently use a fallback timestamp as support-window evidence. Preserve explicit timestamp validity/provenance. Do not broaden `DeliveryWindow` or Sales send behavior.
+
+**Other test outcomes:** Concurrent create attempts yield one nonterminal SupportHandoff; the partial unique index covers `requested`, `provisioning`, `open`, `closing`, and `recovery_required`; source-message and `(conversation_id, ingress_sequence)` uniqueness reject duplicates; lock-version races have one winner; BridgeMessage direction/status transitions match design §§5-6; encryption, redaction, and retention tests pass. Sales.DeliveryAttempt still requires its Sales Order.
+
+**Performance/scaling:** Add only indexed lookups for conversation, source identity, state, and sequence. Keep ingress and state transitions in bounded transactions; never call Chatwoot while holding a database transaction. Use bounded pages for recovery scans. Enforce a durable unique constraint for each source event and one active handoff per conversation. Do not add Redis/ETS ownership locks or unbounded transcript storage.
+
+**STOP:** `STOP=TIMESTAMP_RANGE_TEST_MISSING`, `STOP=TIMESTAMP_EXCEPTION_ESCAPES`, `STOP=INVALID_TIMESTAMP_TRUSTED`, `STOP=VALID_SIBLING_DROPPED`, `STOP=HANDOFF_UNIQUENESS_MISSING`, `STOP=SALES_INVARIANT_CHANGE`.
+
+### Support Gate C: durable Help intake and customer-to-Chatwoot routing
+
+**Dependency:** Support Gate B and CG-1 pass and this gate is separately authorized. This gate must use the approved durable STOP routing and shared outbound authorization; it may not add a direct Meta sender.
+
+**Files:**
+
+- Modify: `lib/fastcheck/messaging/whatsapp/conversation_state_machine.ex`
+- Modify only as required: `lib/fastcheck/sales/conversation.ex`
+- Modify: `lib/fastcheck/workers/whatsapp_inbound_worker.ex`
+- Create: `lib/fastcheck/support/bridge_router.ex`
+- Create: `lib/fastcheck/messaging/chatwoot/api_inbox_client.ex`
+- Test: `test/fastcheck/messaging/whatsapp/support_routing_test.exs`
+- Test: `test/fastcheck/support/bridge_router_test.exs`
+- Test: `test/fastcheck/messaging/chatwoot/api_inbox_client_test.exs`
+
+**Acceptance outcomes:** Help persists `collecting_support_description`; no SupportHandoff or Chatwoot case exists before a valid description. Invalid input, `0`, `#`, STOP, duplicates, process restart, and active-order recovery follow the approved policy. The first valid description atomically creates exactly one handoff and source BridgeMessage. Per-conversation sequence determines order. Every nonterminal state suppresses Sales. Customer messages during close/recovery are held with a durable disposition path. Chatwoot outages and ambiguous creates remain recoverable without duplicate external messages.
+
+**Performance/scaling:** No N+1 lookup per inbound message. Per-conversation ordering uses the indexed durable sequence and lock only. Keep outbound Chatwoot work outside the routing transaction. Bound Oban concurrency and retries using Support Gate A observations; do not retry ambiguous creates. Track oldest pending age and queue depth without storing PII in telemetry.
+
+**STOP:** `STOP=HELP_TEXT_REACHES_SALES`, `STOP=HANDOFF_CREATED_BEFORE_VALID_DESCRIPTION`, `STOP=ACTIVE_ORDER_CHANGED`, `STOP=SEQUENCE_ORDER_NOT_DURABLE`, `STOP=CHATWOOT_DUPLICATE_CREATE_POSSIBLE`, `STOP=SUPPORT_STATE_POLICY_MISSING`.
+
+### Support Gate D: authenticated callbacks and FastCheck Meta replies
+
+**Dependency:** Support Gate C and CG-1 pass; Gate A verified the exact callback contract; the approved H2/H3 policy is implemented in tests; this gate is separately authorized.
+
+**Files:**
+
+- Modify: `lib/fastcheck_web/router.ex`
+- Create: `lib/fastcheck_web/controllers/webhooks/chatwoot_controller.ex`
+- Create: `lib/fastcheck/messaging/whatsapp/support_delivery_status_reconciler.ex`
+- Create: `lib/fastcheck/workers/support_bridge_worker.ex`
+- Extend: `lib/fastcheck/support/bridge_message.ex`
+- Create: `test/fastcheck_web/controllers/webhooks/chatwoot_controller_test.exs`
+- Create: `test/fastcheck/messaging/whatsapp/support_delivery_status_reconciler_test.exs`
+- Create: `test/fastcheck/workers/support_bridge_worker_test.exs`
+
+**Delivery contract:** `FastCheck.Messaging.WhatsApp.Client` sends support replies to Meta. BridgeMessage is the sole support send and status ledger. The worker checks the latest valid signed inbound timestamp using the strict support-specific 24-hour rule immediately before each Meta call and retry. Reuse only compatible `OutboundDeliveryPolicy.classify/1` classification. Do not use `DeliveryPolicy`, commercial templates, or `Sales.DeliveryAttempt` for support replies. Chatwoot never sends directly to Meta.
+
+**Acceptance outcomes:** Callback authentication and replay checks match the pinned release. Public human messages are admitted only while the handoff permits them. Private notes and system/customer echoes cannot become Meta sends. Callback retries deduplicate by Chatwoot message identity. Pre-fence replies follow the close-reason policy; post-fence replies are quarantined. Meta 429 is retryable only under the compatible classifier and a fresh window check. Permanent/ambiguous outcomes require the specified review/reconciliation. Exact WAMID mapping updates agent and system BridgeMessages; skipped status callbacks advance only to observed evidence. No delivery receipt is fabricated.
+
+**Performance/scaling:** Callback handlers durably record before acknowledging and enqueue only internal IDs. Use indexed unique keys for callback identity and WAMID. Do not block HTTP handlers on Meta sends. Use bounded workers, per-handoff ordering, exponential backoff only for verified safe retry, and bounded status/restart reconciliation. Keep worker concurrency below the verified provider and deployment limits; record queue age and retry depth.
+
+**STOP:** `STOP=CALLBACK_AUTH_OR_REPLAY_FAILURE`, `STOP=ECHO_CAN_SEND_TO_META`, `STOP=RECIPIENT_NOT_CONVERSATION_BOUND`, `STOP=OUTSIDE_WINDOW_SEND`, `STOP=SALES_DELIVERY_ATTEMPT_USED`, `STOP=UNKNOWN_OUTCOME_AUTO_RETRIED`, `STOP=STATUS_EVIDENCE_FABRICATED`.
+
+### Support Gate E: staging certification and operations
+
+**Dependency:** Support Gates A-D and CG-1 pass; this gate is separately authorized. Use test contacts and an isolated nonproduction FastCheck/Chatwoot environment. Keep Paystack in test mode. Do not use production customer data.
+
+**Files:**
+
+- Create: `docs/fastcheck_sales/runbooks/WHATSAPP_CHATWOOT_BRIDGE_OPERATIONS.md`
+- Create: `docs/fastcheck_sales/runbooks/WHATSAPP_CHATWOOT_BRIDGE_CERTIFICATION.md`
+- Create/extend: `test/fastcheck/support/chatwoot_bridge_integration_test.exs`
+- Extend the existing sandbox fixture only if required: `lib/fastcheck/sales/sandbox_fixtures.ex`
+- Extend: `test/fastcheck/sales/sandbox_fixtures_test.exs`
+
+**Acceptance outcomes:** Pass the negative and race matrix in design §16, including Help restart, duplicate ingress, close fences, held-message disposition, STOP suppression, Chatwoot and Meta outages, out-of-range timestamps, strict window expiry, 429 retry, ambiguous send, skipped/out-of-order statuses, backup/restore, and cross-event rejection. Record exact source SHA/tree, test output, sanitized fixtures, callback and provider evidence, and rollback steps. Run focused tests through `scripts/with-test-db-env.sh mix test`; run `scripts/with-test-db-env.sh mix precommit` for the complete local gate. Require exact-head CI and independent review before requesting any later release decision.
+
+**Performance/scaling:** Before testing, approve a workload profile and response/queue-age budgets; do not invent production capacity or vendor quotas. Under that profile, measure bounded ingress latency, queue depth/age, oldest handoff, callback latency, retry volume, DB query count, and restart-recovery duration. Verify all hot queries use the intended indexes and bounded pages. A load test must show no unbounded transcript scan, per-customer N+1 query, cache stampede, or PII in logs/metrics/jobs.
+
+**STOP:** `STOP=STAGING_RACE_FAILURE`, `STOP=RESTORE_MISROUTES_HANDOFF`, `STOP=PERFORMANCE_BUDGET_UNSET`, `STOP=PII_IN_EVIDENCE`, `STOP=TEST_OR_CI_FAILURE`, `STOP=PAYSTACK_NOT_TEST`.
+
+### Support Gate F: separately approved release and canary
+
+**Status:** Proposed only; this plan appendix grants no production or deployment authorization.
+
+**Files/evidence:** Approved release record, `docs/fastcheck_sales/runbooks/WHATSAPP_CHATWOOT_BRIDGE_OPERATIONS.md`, exact deployment manifest/configuration path confirmed by the deployment owner, and a post-release report. Do not add credentials to repository files.
+
+**Dependency:** Support Gates A-E and CG-1 pass; a separate release authorization is required.
+
+**Acceptance outcomes:** A separate owner decision names the exact SHA/tree, deployment target, time window, test recipients, operator coverage, rollback owner, support/Meta alerts, and success/abort thresholds. Start with the smallest approved canary. Verify the canary remains isolated from commercial state; verify rollback and queue recovery. Production Meta changes, secrets, Chatwoot installation, deployment, or live customer traffic require their own explicit authorization and are outside this plan's current authority.
+
+**Performance/scaling:** Use only measured Gate E budgets and verified provider limits. Set configured concurrency, queue caps, alert thresholds, and rollback thresholds before rollout. Stop on sustained backlog growth, missed close-barrier targets, elevated ambiguity, or any event/tenant isolation failure.
+
+**STOP:** `STOP=RELEASE_NOT_SEPARATELY_AUTHORIZED`, `STOP=DEPLOY_SHA_UNKNOWN`, `STOP=ROLLBACK_UNPROVEN`, `STOP=CAPACITY_OR_ALERTS_UNSET`, `STOP=PRODUCTION_MUTATION_NOT_AUTHORIZED`.
+
+## Cross-gate performance and scaling rules
+
+- Postgres owns SupportHandoff, BridgeMessage, per-message ingress order, close fences, delivery evidence, and durable WhatsApp consent. Redis, ETS, PubSub, and Oban are rebuildable scheduling or notification mechanisms only; none may grant or cache reusable send permission.
+- Index the active handoff predicate, source event identities, `(sales_conversation_id, ingress_sequence)`, provider WAMID, and bounded status/reconciliation lookups. Verify representative query plans before staging.
+- Use bounded batch sizes for restart scans, status reconciliation, and retention work. Keep transcript pages bounded; do not load a full conversation into LiveView assigns or worker arguments.
+- Do not make network calls inside a database transaction. Persist a unique dispatch intent first, then call the provider outside the transaction and reconcile ambiguity without blind retries.
+- Configure bounded worker concurrency, rate limits, retry budgets, and queue-age alerts from pinned-release observations and the approved workload profile. Do not invent API quotas or claim unverified capacity.
+- Scope consent reads, serialization, and cache invalidation to the approved business-number/recipient key. Keep authorization lookups indexed and bounded; measure their query count and latency before certification. A cache that cannot prove the latest consent revision must fail closed.
+- Keep plaintext, phone numbers, OTPs, ticket/payment links, secrets, and raw provider payloads out of logs, metrics, traces, Redis keys, PubSub payloads, fixtures, and Oban arguments.
+- No performance target is accepted until the owner records workload, latency, queue-age, and recovery budgets. Missing budgets block Support Gate E.
+- Any proposed change to Sales.DeliveryAttempt's required order relationship or to checkout, Paystack verification, inventory, ticket issue, or resend authority stops for a separate commercial decision: `STOP=COMMERCIAL_INVARIANT_CHANGE`.
+
+## Current authority and stop state
+
+This appendix is a proposal for owner review. The October 15 approved plan remains authoritative. Current authorization remains Gate 0 only. Proposed Support Gates A-F and Global WhatsApp Consent Gate CG-1 are not authorized. CG-1 implements the shared consent guard for current send paths. After CG-1 passes, no later implementation task may add or change a WhatsApp outbound path, including retained October tasks that reach a sender, without using that guard. No application code, migration, environment configuration, Meta/Chatwoot change, installation, deployment, or production data operation is part of this document change.
+
+For this documentation task, any need to change application source is `STOP=APPLICATION_CHANGE_REQUIRED`. The timestamp parser hardening is recorded as a later Support Gate B task only.
+
+- `STOP=OWNER_POLICY_DECISION_REQUIRED`
+- `IMPLEMENTATION_AUTHORIZED=NO`
+- `PRODUCTION_AUTHORIZED=NO`
