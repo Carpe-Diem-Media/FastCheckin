@@ -321,3 +321,66 @@ SUPPORT_GATE_A_PREFLIGHT=EXISTING_A01_A14_MATRIX_PRESERVED
 SUPPORT_GATE_A_EXECUTION=BLOCKED
 NEXT_ACTION=REVIEW_AND_ADOPT_SOLO_MAINTAINER_POLICY_THEN_RECORD_AUTHENTICATED_OWNER_EXCEPTION
 ~~~
+
+## 13. Final amendment: owner acceptance and closeout adoption guard
+
+**Prepared:** 2026-11-11
+
+**Status at PR preparation:** `OWNER_ACCEPTED_PENDING_SIGNED_CLOSEOUT`. This amendment updates the current disposition using authenticated GitHub evidence. It preserves the earlier report and does not create pre-merge approval or authorize implementation, release, or production activity.
+
+### 13.1 Adopted review policy
+
+**Status: VERIFIED.** PR #554 merged to `main` at `414418708780ae328df0cd9e70356c9bc866a321`. The merge parents are PR #554 base `3893d2afeee0cdbb05dc8c331e18996f4cfa3e98` and reviewed head `1fcd8103756cc04fe38825fb9464ca222fbd1e34`. GitHub reports a valid merge signature. The adopted policy blob is `0ee29271b3384cb31a316453e883cce2b4a4b45c`; the closeout report before this amendment was blob `13affd18ac2205d924c6fafa1fcffd3186da9cda`. CI run [42993305338](https://github.com/JCSchoeman96/FastCheckin/actions/runs/42993305338) completed successfully on the exact merge SHA.
+
+The authenticated owner authorization for initial policy adoption is [PR #554 comment 6790167059](https://github.com/JCSchoeman96/FastCheckin/pull/554#issuecomment-6790167059). GitHub identifies its author as `JCSchoeman96`. The policy's `PROPOSED` label described its status before adoption. The signed merge and successful exact-SHA CI now establish adoption; this amendment does not rewrite the policy.
+
+### 13.2 Authenticated PR #553 owner decision
+
+**Status: VERIFIED.** The owner decision is [PR #553 comment 6792967607](https://github.com/JCSchoeman96/FastCheckin/pull/553#issuecomment-6792967607), posted by `JCSchoeman96` with GitHub author association `OWNER` at `2026-11-11T10:06:47Z`.
+
+The comment identifies exception `FASTCHECK-REVIEW-EXCEPTION-PR553-RETRO`, adopted policy commit `414418708780ae328df0cd9e70356c9bc866a321`, policy blob `0ee29271b3384cb31a316453e883cce2b4a4b45c`, and the exact PR #553 base, head, and merge. It accepts the documentation-only scope and the three authority blobs in §2. The owner explicitly accepts the substantive §3.2 change from requiring a separate formal Gate 0 signature to requiring an owner-approved authority record adopted on signed Git history. The owner also accepts the dated reconciliation of publication-pending statements.
+
+PR #553 had zero formal GitHub reviews. No independent human review occurred or is recorded; the AI technical assessment is not human approval. The owner accepts the missed-review risk as a retrospective exception. The decision creates no historical pre-merge approval and grants no application, CG-1, Chatwoot, Meta, customer-data, messaging, deployment, or production authorization.
+
+PR #553 remains exactly PR base `e5ec24e53d44b0cebd472c1a05f138f314bb337f`, head `c032b8a12f8a0039ed90388a32dce8ba338e4f49`, and merge `3893d2afeee0cdbb05dc8c331e18996f4cfa3e98`. Its plan, specification, and decision blobs match §2. Post-merge CI run `42966172006` succeeded on the merge SHA. These facts preserve the earlier evidence and supersede only the pending owner-disposition statements.
+
+### 13.3 Exception lifecycle
+
+| Transition | Evidence and disposition |
+|---|---|
+| `PENDING -> EVIDENCE_VERIFIED` | Verified for this amendment on 2026-11-11. The exact PR identity, three authority blobs, post-merge CI, GitHub signature, missing formal review, and authority/status differences are recorded in §§1-8 and this amendment. This is an AI-assisted evidence check, not independent human approval. |
+| `EVIDENCE_VERIFIED -> OWNER_ACCEPTED` | Verified by authenticated owner comment 6792967607 at `2026-11-11T10:06:47Z`, author association `OWNER`. The decision accepts the missing review, exact authority-sequence change, historical status reconciliation, and residual governance risk. |
+| `OWNER_ACCEPTED -> CLOSED` | **Pending.** Close only after this signed closeout amendment is merged to `main`, GitHub verifies the adopted closeout commit signature, and required CI succeeds on that exact merge SHA. Opening this PR or passing its pre-merge checks does not close the exception. |
+
+The current state is `OWNER_ACCEPTED_PENDING_SIGNED_CLOSEOUT`. When all closure guards above pass, the exception state becomes `CLOSED`; no GitHub review history will be changed. The lifecycle is terminal after closure. Any later decision requires a new exception record.
+
+### 13.4 Support Gate A handoff
+
+**Status: PREFLIGHT ONLY; execution blocked.** Preserve the existing `WHATSAPP_CHATWOOT_FEASIBILITY.md` and A01-A14 cases, all `NOT RUN`. The reported Chatwoot `v4.19.1` CE release and OCI digest `sha256:04895c7bd0550d9e74b45b7202787b56f7ee4e891ebbde0c429c8c32901b97cf` remain candidate evidence, not installation authorization or proof of runtime behavior.
+
+The next separate preflight must identify and obtain owner approval for a disposable Linux/amd64 VM, its operator and teardown owner, CPU/memory/storage limits, and teardown procedure. It must pin and verify every supporting image, isolate disposable test databases, restrict egress to the approved test endpoints, exclude production Meta credentials, senders, customer data, DNS, and FastCheck connections, and use only synthetic fixtures and test-only credentials. It must document the callback authentication strategy, approved capacity-test workload, evidence retention, and the exact setup and test operations permitted.
+
+For review, use the adopted solo-maintainer policy: seek an independent human review when available. If none is available, document an independent AI technical assessment as AI-only and obtain explicit authenticated owner acceptance where the policy permits. Do not present AI assessment as human review. No Chatwoot installation or A01-A14 execution is authorized by this amendment.
+
+### 13.5 Conditional final status
+
+~~~text
+PR_554_POLICY_ADOPTION=VERIFIED
+POLICY_COMMIT=414418708780ae328df0cd9e70356c9bc866a321
+POLICY_BLOB=0ee29271b3384cb31a316453e883cce2b4a4b45c
+POLICY_CI=42993305338_SUCCESS_ON_POLICY_MERGE_SHA
+POLICY_MERGE_SIGNATURE=GITHUB_VERIFIED_VALID
+PR_553_OWNER_DECISION=6792967607_AUTHENTICATED_OWNER
+PR_553_EXCEPTION_ID=FASTCHECK-REVIEW-EXCEPTION-PR553-RETRO
+PR_553_FORMAL_REVIEWS=0
+PR_553_HUMAN_REVIEW=NONE_RECORDED_OR_OCCURRED
+PR_553_RETROSPECTIVE_APPROVAL=NOT_CREATED
+EXCEPTION_STATE=OWNER_ACCEPTED_PENDING_SIGNED_CLOSEOUT
+EXCEPTION_CLOSED=NO
+EXCEPTION_CLOSE_GUARD=SIGNED_CLOSEOUT_ON_MAIN_AND_VALID_GITHUB_SIGNATURE_AND_SUCCESSFUL_CI_ON_CLOSEOUT_MERGE_SHA
+IMPLEMENTATION_AUTHORIZED=NO
+PRODUCTION_AUTHORIZED=NO
+SUPPORT_GATE_A=A01_A14_NOT_RUN_EXECUTION_BLOCKED
+GATE0=OWNER_ACCEPTED_PENDING_SIGNED_CLOSEOUT
+GATE0_AFTER_ALL_CLOSE_GUARDS=CLOSED
+~~~
