@@ -8,6 +8,7 @@ Use this file as the project-specific source of truth before making changes.
 
 - Don't log PII.
 - Verify that authentication middleware wraps every route.
+- Follow [`docs/fastcheck_sales/runbooks/SOLO_MAINTAINER_REVIEW_POLICY.md`](docs/fastcheck_sales/runbooks/SOLO_MAINTAINER_REVIEW_POLICY.md) when an independent human reviewer is unavailable. Until that policy is adopted on signed Git history, it is a proposal and grants no exception.
 
 ## Beads / bd Task Tracking
 
