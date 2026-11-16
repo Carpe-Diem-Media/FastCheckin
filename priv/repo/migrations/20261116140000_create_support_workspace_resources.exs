@@ -26,11 +26,15 @@ defmodule FastCheck.Repo.Migrations.CreateSupportWorkspaceResources do
   def change do
     create table(:support_cases) do
       add(:conversation_id, references(:sales_conversations, on_delete: :restrict), null: false)
+      add(:public_id, :uuid, null: false)
       add(:generation, :integer, null: false, default: 1)
       add(:state, :string, null: false, default: "waiting")
+      add(:reason_code, :string, size: 64)
       add(:assigned_operator_id, :string)
       add(:requested_at, :utc_datetime, null: false)
       add(:claimed_at, :utc_datetime)
+      add(:resolved_at, :utc_datetime)
+      add(:cancelled_at, :utc_datetime)
       add(:next_message_sequence, :bigint, null: false, default: 1)
       add(:lock_version, :bigint, null: false, default: 1)
 
@@ -83,8 +87,12 @@ defmodule FastCheck.Repo.Migrations.CreateSupportWorkspaceResources do
       add(:fencing_version, :bigint, null: false, default: 0)
       add(:lock_version, :bigint, null: false, default: 1)
       add(:next_attempt_at, :utc_datetime)
+      add(:dispatch_authorized_at, :utc_datetime)
+      add(:dispatch_started_at, :utc_datetime)
+      add(:response_received_at, :utc_datetime)
       add(:provider_message_id, :string)
-      add(:failure_class, :string)
+      add(:response_class, :string, size: 64)
+      add(:failure_class, :string, size: 64)
 
       timestamps(type: :utc_datetime)
     end
@@ -255,6 +263,8 @@ defmodule FastCheck.Repo.Migrations.CreateSupportWorkspaceResources do
         name: :support_cases_conversation_generation_uidx
       )
     )
+
+    create(unique_index(:support_cases, [:public_id], name: :support_cases_public_id_uidx))
 
     create(
       unique_index(:support_cases, [:conversation_id],

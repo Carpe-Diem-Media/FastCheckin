@@ -41,6 +41,36 @@ defmodule FastCheck.Support.SupportDomainTest do
     refute ResourceInfo.attribute(SupportCase, :bridge_message_id)
   end
 
+  test "exposes the adopted case identity, reason, and lifecycle timestamps" do
+    assert %{type: Ash.Type.UUID, allow_nil?: false} =
+             ResourceInfo.attribute(SupportCase, :public_id)
+
+    assert Enum.any?(ResourceInfo.identities(SupportCase), fn identity ->
+             identity.name == :unique_public_id and identity.keys == [:public_id]
+           end)
+
+    assert reason_code = ResourceInfo.attribute(SupportCase, :reason_code)
+    assert reason_code.type == Ash.Type.String
+    assert reason_code.constraints[:max_length] == 64
+
+    assert ResourceInfo.attribute(SupportCase, :resolved_at)
+    assert ResourceInfo.attribute(SupportCase, :cancelled_at)
+  end
+
+  test "exposes explicit operation dispatch timestamps and bounded response classification" do
+    for name <- [:dispatch_authorized_at, :dispatch_started_at, :response_received_at] do
+      assert ResourceInfo.attribute(ExternalCreateOperation, name)
+    end
+
+    assert response_class = ResourceInfo.attribute(ExternalCreateOperation, :response_class)
+    assert response_class.type == Ash.Type.String
+    assert response_class.constraints[:max_length] == 64
+
+    assert failure_class = ResourceInfo.attribute(ExternalCreateOperation, :failure_class)
+    assert failure_class.type == Ash.Type.String
+    assert failure_class.constraints[:max_length] == 64
+  end
+
   test "does not expose implicit CRUD actions before guarded actions are implemented" do
     for resource <- @resources do
       mutating_actions =

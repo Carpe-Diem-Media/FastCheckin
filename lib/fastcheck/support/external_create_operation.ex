@@ -59,8 +59,18 @@ defmodule FastCheck.Support.ExternalCreateOperation do
     end
 
     attribute(:next_attempt_at, :utc_datetime)
+    attribute(:dispatch_authorized_at, :utc_datetime)
+    attribute(:dispatch_started_at, :utc_datetime)
+    attribute(:response_received_at, :utc_datetime)
     attribute(:provider_message_id, :string, sensitive?: true)
-    attribute(:failure_class, :string)
+
+    attribute :response_class, :string do
+      constraints(max_length: 64, length_count: :codepoints)
+    end
+
+    attribute :failure_class, :string do
+      constraints(max_length: 64, length_count: :codepoints)
+    end
 
     create_timestamp(:inserted_at)
     update_timestamp(:updated_at)

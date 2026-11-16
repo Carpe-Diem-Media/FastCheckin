@@ -58,6 +58,7 @@ defmodule FastCheck.Support.SupportCaseTest do
     assert MapSet.subset?(
              MapSet.new([
                "support_cases_conversation_generation_uidx",
+               "support_cases_public_id_uidx",
                "support_cases_one_active_per_conversation_uidx",
                "support_cases_queue_idx",
                "support_cases_assignment_idx",
@@ -76,6 +77,92 @@ defmodule FastCheck.Support.SupportCaseTest do
              ]),
              indexes
            )
+  end
+
+  test "creates the adopted case and operation columns with database-enforced bounds" do
+    case_columns =
+      Repo.query!(
+        """
+        SELECT column_name, data_type, is_nullable, character_maximum_length
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'support_cases'
+        """,
+        []
+      ).rows
+      |> Map.new(fn [name, type, nullable, max_length] ->
+        {name, {type, nullable, max_length}}
+      end)
+
+    assert case_columns["public_id"] == {"uuid", "NO", nil}
+    assert case_columns["reason_code"] == {"character varying", "YES", 64}
+    assert case_columns["resolved_at"] == {"timestamp without time zone", "YES", nil}
+    assert case_columns["cancelled_at"] == {"timestamp without time zone", "YES", nil}
+
+    operation_columns =
+      Repo.query!(
+        """
+        SELECT column_name, data_type, is_nullable, character_maximum_length
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'external_create_operations'
+        """,
+        []
+      ).rows
+      |> Map.new(fn [name, type, nullable, max_length] ->
+        {name, {type, nullable, max_length}}
+      end)
+
+    for name <- ["dispatch_authorized_at", "dispatch_started_at", "response_received_at"] do
+      assert operation_columns[name] == {"timestamp without time zone", "YES", nil}
+    end
+
+    assert operation_columns["response_class"] == {"character varying", "YES", 64}
+    assert operation_columns["failure_class"] == {"character varying", "YES", 64}
+  end
+
+  test "enforces public id uniqueness and classification bounds in PostgreSQL" do
+    public_id = Ecto.UUID.generate()
+    first_conversation_id = insert_conversation!()
+    insert_support_case!(first_conversation_id, 1, "waiting", public_id: public_id)
+
+    second_conversation_id = insert_conversation!()
+
+    assert_raise Postgrex.Error, ~r/null value in column "public_id"/, fn ->
+      Repo.query!(
+        """
+        INSERT INTO support_cases
+          (public_id, conversation_id, generation, state, requested_at, inserted_at, updated_at)
+        VALUES (NULL, $1, 1, 'waiting', now(), now(), now())
+        """,
+        [second_conversation_id]
+      )
+    end
+
+    assert_raise Postgrex.Error, fn ->
+      insert_support_case!(second_conversation_id, 1, "waiting", public_id: public_id)
+    end
+
+    third_conversation_id = insert_conversation!()
+
+    assert_raise Postgrex.Error, ~r/value too long for type character varying\(64\)/, fn ->
+      insert_support_case!(third_conversation_id, 1, "waiting",
+        reason_code: String.duplicate("r", 65)
+      )
+    end
+
+    case_id = insert_support_case!(third_conversation_id, 1, "waiting")
+    message_id = insert_message!(case_id, 1)
+
+    assert_raise Postgrex.Error, ~r/value too long for type character varying\(64\)/, fn ->
+      insert_operation!(case_id, message_id, "00000000-0000-7000-8000-000000000021",
+        response_class: String.duplicate("c", 65)
+      )
+    end
+
+    assert_raise Postgrex.Error, ~r/value too long for type character varying\(64\)/, fn ->
+      insert_operation!(case_id, message_id, "00000000-0000-7000-8000-000000000022",
+        failure_class: String.duplicate("f", 65)
+      )
+    end
   end
 
   test "all support foreign keys preserve dependent and audit rows" do
@@ -174,11 +261,11 @@ defmodule FastCheck.Support.SupportCaseTest do
       Repo.query!(
         """
         INSERT INTO support_cases
-          (conversation_id, generation, state, requested_at, next_message_sequence, lock_version,
-           inserted_at, updated_at)
-        VALUES ($1, 1, 'waiting', now(), 0, 1, now(), now())
+          (public_id, conversation_id, generation, state, requested_at, next_message_sequence,
+           lock_version, inserted_at, updated_at)
+        VALUES ($1, $2, 1, 'waiting', now(), 0, 1, now(), now())
         """,
-        [conversation_id]
+        [Ecto.UUID.dump!(Ecto.UUID.generate()), conversation_id]
       )
     end
 
@@ -186,11 +273,11 @@ defmodule FastCheck.Support.SupportCaseTest do
       Repo.query!(
         """
         INSERT INTO support_cases
-          (conversation_id, generation, state, requested_at, next_message_sequence, lock_version,
-           inserted_at, updated_at)
-        VALUES ($1, 1, 'waiting', now(), 1, 0, now(), now())
+          (public_id, conversation_id, generation, state, requested_at, next_message_sequence,
+           lock_version, inserted_at, updated_at)
+        VALUES ($1, $2, 1, 'waiting', now(), 1, 0, now(), now())
         """,
-        [conversation_id]
+        [Ecto.UUID.dump!(Ecto.UUID.generate()), conversation_id]
       )
     end
   end
@@ -355,17 +442,20 @@ defmodule FastCheck.Support.SupportCaseTest do
     id
   end
 
-  defp insert_support_case!(conversation_id, generation, state) do
+  defp insert_support_case!(conversation_id, generation, state, opts \\ []) do
+    public_id = Keyword.get(opts, :public_id, Ecto.UUID.generate())
+    reason_code = Keyword.get(opts, :reason_code)
+
     result =
       Repo.query!(
         """
         INSERT INTO support_cases
-          (conversation_id, generation, state, requested_at, next_message_sequence, lock_version,
-           inserted_at, updated_at)
-        VALUES ($1, $2, $3, now(), 1, 1, now(), now())
+          (public_id, conversation_id, generation, state, reason_code, requested_at,
+           next_message_sequence, lock_version, inserted_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, now(), 1, 1, now(), now())
         RETURNING id
         """,
-        [conversation_id, generation, state]
+        [Ecto.UUID.dump!(public_id), conversation_id, generation, state, reason_code]
       )
 
     [[id]] = result.rows
@@ -391,17 +481,21 @@ defmodule FastCheck.Support.SupportCaseTest do
     id
   end
 
-  defp insert_operation!(case_id, message_id, operation_id) do
+  defp insert_operation!(case_id, message_id, operation_id, opts \\ []) do
+    response_class = Keyword.get(opts, :response_class)
+    failure_class = Keyword.get(opts, :failure_class)
+
     result =
       Repo.query!(
         """
         INSERT INTO external_create_operations
           (operation_id, support_case_id, support_message_id, provider, operation_kind, state,
-           attempt_number, fencing_version, lock_version, inserted_at, updated_at)
-        VALUES ($1, $2, $3, 'whatsapp', 'send_message', 'queued', 0, 0, 1, now(), now())
+           response_class, failure_class, attempt_number, fencing_version, lock_version,
+           inserted_at, updated_at)
+        VALUES ($1, $2, $3, 'whatsapp', 'send_message', 'queued', $4, $5, 0, 0, 1, now(), now())
         RETURNING id
         """,
-        [Ecto.UUID.dump!(operation_id), case_id, message_id]
+        [Ecto.UUID.dump!(operation_id), case_id, message_id, response_class, failure_class]
       )
 
     [[id]] = result.rows

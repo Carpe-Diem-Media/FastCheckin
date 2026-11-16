@@ -23,6 +23,10 @@ defmodule FastCheck.Support.SupportCase do
   attributes do
     integer_primary_key(:id)
 
+    attribute :public_id, :uuid do
+      allow_nil?(false)
+    end
+
     attribute :generation, :integer do
       allow_nil?(false)
       default(1)
@@ -33,6 +37,10 @@ defmodule FastCheck.Support.SupportCase do
       default("waiting")
     end
 
+    attribute :reason_code, :string do
+      constraints(max_length: 64, length_count: :codepoints)
+    end
+
     attribute(:assigned_operator_id, :string, sensitive?: true)
 
     attribute :requested_at, :utc_datetime do
@@ -40,6 +48,8 @@ defmodule FastCheck.Support.SupportCase do
     end
 
     attribute(:claimed_at, :utc_datetime)
+    attribute(:resolved_at, :utc_datetime)
+    attribute(:cancelled_at, :utc_datetime)
 
     attribute :next_message_sequence, :integer do
       allow_nil?(false)
@@ -77,5 +87,9 @@ defmodule FastCheck.Support.SupportCase do
     has_many :events, FastCheck.Support.SupportCaseEvent do
       destination_attribute(:support_case_id)
     end
+  end
+
+  identities do
+    identity(:unique_public_id, [:public_id])
   end
 end
