@@ -12,7 +12,7 @@ config :ash, default_string_length_count: :codepoints
 
 config :fastcheck,
   ecto_repos: [FastCheck.Repo],
-  ash_domains: [FastCheck.Sales],
+  ash_domains: [FastCheck.Sales, FastCheck.Support],
   generators: [timestamp_type: :utc_datetime]
 
 config :fastcheck, FastCheck.Repo, migration_lock: :pg_advisory_lock
