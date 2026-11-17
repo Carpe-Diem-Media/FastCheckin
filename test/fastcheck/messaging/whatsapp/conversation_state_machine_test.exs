@@ -95,8 +95,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
                "Kies 'n kaartjie tipe:",
                "```",
                "1. General - R10",
-               "0. Terug",
-               "#. Terug na hoof kieslys",
+               "0. Hoofkieslys",
                "```"
              ]
              |> Enum.join("\n")
@@ -123,7 +122,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     assert result.response_body =~ "Totaal betaalbaar: R20"
     assert result.response_body =~ "Is hierdie korrek"
     assert result.response_body =~ "1. OK"
-    assert result.response_body =~ "0. Terug"
+    assert result.response_body =~ "0. Hoofkieslys"
 
     Application.put_env(:fastcheck, :paystack_request_fun, PaymentSupport.success_request_fun())
 
@@ -168,6 +167,18 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
         "payment_attempt_id" => state_data["payment_attempt_id"]
       }
     )
+
+    assert {:ok, recovered} = handle(result.conversation, "0", "wamid.flow-recover")
+    assert recovered.conversation.state == "main_menu"
+    assert recovered.conversation.state_data["sales_order_id"] == order_id
+
+    assert recovered.conversation.state_data["payment_attempt_id"] ==
+             state_data["payment_attempt_id"]
+
+    assert recovered.conversation.state_data["order_public_reference"] ==
+             state_data["order_public_reference"]
+
+    assert Repo.aggregate(from(o in "sales_orders"), :count) == 1
   end
 
   test "disabled offer at confirmation returns customer to refreshed offer selection", %{
@@ -472,7 +483,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     assert {:ok, result} = handle(collecting_quantity.conversation, "0", "gate-stale-back-6")
 
     assert result.conversation.state == "main_menu"
-    assert result.response_body =~ "WhatsApp-kaartjieverkope"
+    assert result.response_body =~ "Koop kaartjies"
     refute result.response_body =~ "General - R10"
     assert_flow_fields_absent(result.conversation.state_data)
     assert Repo.aggregate(from(o in "sales_orders"), :count) == 0
@@ -1054,8 +1065,8 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     refute_enqueued(worker: SendWhatsAppTicketLinkWorker)
 
     assert {:ok, backed} = handle(repeated.conversation, "0", "wamid.resend-otp-7")
-    assert backed.conversation.state == "collecting_resend_email"
-    assert backed.response_body =~ "e-pos"
+    assert backed.conversation.state == "main_menu"
+    assert backed.response_body =~ "Koop kaartjies"
     refute Map.has_key?(backed.conversation.state_data, "resend_email")
     refute Map.has_key?(backed.conversation.state_data, "resend_email_otp_result_status")
 
@@ -1101,8 +1112,8 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     refute Map.has_key?(ordinary.conversation.state_data, "ticket_issue_id")
 
     assert {:ok, zero} = handle(ordinary.conversation, "0", "wamid.resend-await-2")
-    assert zero.conversation.state == "verified_resend_delivery_queued"
-    assert zero.response_body == ordinary.response_body
+    assert zero.conversation.state == "main_menu"
+    assert zero.response_body =~ "Koop kaartjies"
 
     refute_enqueued(worker: SendWhatsAppPaymentLinkWorker)
 
@@ -1179,8 +1190,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
                "Is hierdie korrek? Gaan voort na betaling.",
                "```",
                "1. OK",
-               "0. Terug",
-               "#. Terug na hoof kieslys",
+               "0. Hoofkieslys",
                "```"
              ]
              |> Enum.join("\n")
@@ -1223,8 +1233,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
                  "```",
                  "1. General - R10",
                  "2. VIP - R1999.50",
-                 "0. Terug",
-                 "#. Terug na hoof kieslys",
+                 "0. Hoofkieslys",
                  "```"
                ],
                "\n"
@@ -1235,8 +1244,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
                  "```",
                  "1. VIP - R1999.50",
                  "2. General - R10",
-                 "0. Terug",
-                 "#. Terug na hoof kieslys",
+                 "0. Hoofkieslys",
                  "```"
                ],
                "\n"
@@ -1331,6 +1339,41 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     assert {:ok, recovered} = handle(result.conversation, "0", "wamid.recover-4")
     assert recovered.conversation.state == "main_menu"
     assert recovered.response_body =~ "Koop kaartjies"
+  end
+
+  test "zero and hidden hash escape supported states without creating an order" do
+    states =
+      ~w(selecting_event selecting_ticket_type collecting_quantity collecting_buyer_name collecting_email confirming_order collecting_resend_name collecting_resend_email collecting_resend_otp ticket_issued)
+
+    for state <- states, input <- ["0", "#"] do
+      conversation =
+        insert_conversation!(
+          state: state,
+          state_data: %{"resend_challenge_public_id" => "obsolete"}
+        )
+
+      assert {:ok, result} = handle(conversation, input, "wamid.escape-#{state}-#{input}")
+      assert result.conversation.state == "main_menu"
+      assert result.response_body =~ "Koop kaartjies"
+      refute Map.has_key?(result.conversation.state_data, "resend_challenge_public_id")
+    end
+
+    assert Repo.aggregate(from(o in "sales_orders"), :count) == 0
+  end
+
+  test "zero leaves ticket selection for the main menu", %{conversation: conversation} do
+    result =
+      conversation
+      |> progress("hi", "zero-menu-1")
+      |> progress("1", "zero-menu-2")
+      |> progress("1", "zero-menu-3")
+      |> progress("1", "zero-menu-4")
+
+    assert result.conversation.state == "selecting_ticket_type"
+    assert {:ok, recovered} = handle(result.conversation, "0", "wamid.zero-menu-5")
+    assert recovered.conversation.state == "main_menu"
+    assert recovered.response_body =~ "Koop kaartjies"
+    assert_flow_fields_absent(recovered.conversation.state_data)
   end
 
   test "# restart clears current flow and returns to main menu", %{conversation: conversation} do
@@ -1722,6 +1765,150 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     end
   end
 
+  test "recovery drops foreign and replaced payment attempt hints", %{event: event, offer: offer} do
+    conversation = insert_conversation!(state: "payment_pending")
+
+    order =
+      create_active_order!(conversation, event, offer, "checkpoint-current-#{conversation.id}")
+
+    other_conversation = insert_conversation!(state: "payment_pending")
+
+    other_order =
+      create_active_order!(
+        other_conversation,
+        event,
+        offer,
+        "checkpoint-other-#{other_conversation.id}"
+      )
+
+    foreign = PaymentSupport.insert_initialized_attempt!(other_order)
+
+    foreign_hint = %{
+      conversation
+      | state_data: %{"sales_order_id" => order.id, "payment_attempt_id" => foreign.id}
+    }
+
+    assert {:ok, recovered} = handle(foreign_hint, "0", "wamid.foreign-attempt")
+    assert recovered.conversation.state_data["sales_order_id"] == order.id
+    refute Map.has_key?(recovered.conversation.state_data, "payment_attempt_id")
+
+    session_id =
+      Repo.one!(
+        from s in "sales_checkout_sessions", where: s.sales_order_id == ^order.id, select: s.id
+      )
+
+    key = "paystack:init:#{order.id}:#{session_id}"
+
+    failed =
+      FastCheck.Sales.PaymentAttempt
+      |> Changeset.for_create(
+        :create_initializing,
+        %{
+          sales_order_id: order.id,
+          provider: "paystack",
+          provider_reference: "failed-#{order.id}",
+          idempotency_key: key,
+          amount_cents: order.total_amount_cents,
+          currency: order.currency
+        },
+        actor: SalesFixtures.system_actor()
+      )
+      |> Ash.create!(authorize?: false)
+      |> Changeset.for_update(:mark_failed, %{failure_code: "test"},
+        actor: SalesFixtures.system_actor()
+      )
+      |> Ash.update!(authorize?: false)
+
+    replacement = PaymentSupport.insert_initialized_attempt!(order, %{idempotency_key: key})
+
+    stale_hint = %{
+      recovered.conversation
+      | state_data: Map.put(recovered.conversation.state_data, "payment_attempt_id", failed.id)
+    }
+
+    assert {:ok, refreshed} = handle(stale_hint, "#", "wamid.replaced-attempt")
+    assert refreshed.conversation.state_data["sales_order_id"] == order.id
+    refute refreshed.conversation.state_data["payment_attempt_id"] == failed.id
+    assert replacement.id != failed.id
+  end
+
+  test "recovery drops a stale initializing attempt and a prior order checkpoint", %{
+    event: event,
+    offer: offer
+  } do
+    conversation = insert_conversation!(state: "payment_pending")
+
+    old_order =
+      create_active_order!(conversation, event, offer, "old-checkpoint-#{conversation.id}")
+
+    session_id =
+      Repo.one!(
+        from s in "sales_checkout_sessions",
+          where: s.sales_order_id == ^old_order.id,
+          select: s.id
+      )
+
+    attempt =
+      FastCheck.Sales.PaymentAttempt
+      |> Changeset.for_create(
+        :create_initializing,
+        %{
+          sales_order_id: old_order.id,
+          provider: "paystack",
+          provider_reference: "initializing-#{old_order.id}",
+          idempotency_key: "paystack:init:#{old_order.id}:#{session_id}",
+          amount_cents: old_order.total_amount_cents,
+          currency: old_order.currency
+        },
+        actor: SalesFixtures.system_actor()
+      )
+      |> Ash.create!(authorize?: false)
+
+    Application.put_env(:fastcheck, :paystack_initializing_stale_after_seconds, 0)
+
+    hinted = %{
+      conversation
+      | state_data: %{"sales_order_id" => old_order.id, "payment_attempt_id" => attempt.id}
+    }
+
+    assert {:ok, result} = handle(hinted, "0", "wamid.stale-initializing")
+    refute Map.has_key?(result.conversation.state_data, "payment_attempt_id")
+
+    other_conversation = insert_conversation!(state: "payment_pending")
+
+    prior_order =
+      create_active_order!(
+        other_conversation,
+        event,
+        offer,
+        "prior-checkpoint-#{other_conversation.id}"
+      )
+
+    assert {:ok, _} =
+             FastCheck.Sales.CheckoutExpiry.cancel_order(prior_order.id, other_conversation.id)
+
+    new_order =
+      create_active_order!(
+        other_conversation,
+        event,
+        offer,
+        "new-checkpoint-#{other_conversation.id}"
+      )
+
+    prior_hint = %{
+      other_conversation
+      | state_data: %{"sales_order_id" => prior_order.id, "payment_attempt_id" => attempt.id}
+    }
+
+    assert {:ok, recovered} = handle(prior_hint, "#", "wamid.replaced-order")
+    assert recovered.conversation.state_data["sales_order_id"] == new_order.id
+
+    assert recovered.conversation.state_data["order_public_reference"] ==
+             new_order.public_reference
+
+    refute Map.has_key?(recovered.conversation.state_data, "payment_attempt_id")
+  end
+
   test "main menu Buy and Resend cannot bypass a hidden active Order", %{
     event: event,
     offer: offer
@@ -1841,9 +2028,8 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     assert Repo.one!(from(o in "sales_orders", select: count(o.id))) == before_count
   end
 
-  test "0 from selecting_ticket_type returns to event selection", %{
-    conversation: conversation,
-    event: event
+  test "0 from selecting_ticket_type returns to main menu", %{
+    conversation: conversation
   } do
     result =
       conversation
@@ -1856,17 +2042,14 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
 
     assert {:ok, backed} = handle(result.conversation, "0", "wamid.back-event-5")
 
-    assert backed.conversation.state == "selecting_event"
-    assert backed.response_body =~ "Kies 'n geleentheid"
-    assert backed.response_body =~ "Voelgoed Live"
-    assert backed.conversation.state_data["event_options"] == %{"1" => event.id}
-    refute Map.has_key?(backed.conversation.state_data, "selected_event_id")
-    refute Map.has_key?(backed.conversation.state_data, "selected_offer_id")
+    assert backed.conversation.state == "main_menu"
+    assert backed.response_body =~ "Koop kaartjies"
+    assert_flow_fields_absent(backed.conversation.state_data)
+    refute_enqueued(worker: SendWhatsAppPaymentLinkWorker)
   end
 
-  test "0 from collecting_quantity returns to ticket type selection", %{
-    conversation: conversation,
-    event: event
+  test "0 from collecting_quantity returns to main menu", %{
+    conversation: conversation
   } do
     result =
       conversation
@@ -1880,18 +2063,14 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
 
     assert {:ok, backed} = handle(result.conversation, "0", "wamid.back-offer-6")
 
-    assert backed.conversation.state == "selecting_ticket_type"
-    assert backed.response_body =~ "General - R10"
-    assert backed.conversation.state_data["selected_event_id"] == event.id
-    assert backed.conversation.state_data["offer_options"] != %{}
-    refute Map.has_key?(backed.conversation.state_data, "selected_offer_id")
-    refute Map.has_key?(backed.conversation.state_data, "quantity")
+    assert backed.conversation.state == "main_menu"
+    assert backed.response_body =~ "Koop kaartjies"
+    assert_flow_fields_absent(backed.conversation.state_data)
+    refute_enqueued(worker: SendWhatsAppPaymentLinkWorker)
   end
 
-  test "0 from collecting_buyer_name returns to quantity", %{
-    conversation: conversation,
-    event: event,
-    offer: offer
+  test "0 from collecting_buyer_name returns to main menu", %{
+    conversation: conversation
   } do
     result =
       conversation
@@ -1906,19 +2085,14 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
 
     assert {:ok, backed} = handle(result.conversation, "0", "wamid.back-quantity-7")
 
-    assert backed.conversation.state == "collecting_quantity"
-    assert backed.response_body =~ "Hoeveel kaartjies"
-    assert backed.conversation.state_data["selected_event_id"] == event.id
-    assert backed.conversation.state_data["selected_offer_id"] == offer.id
-    refute Map.has_key?(backed.conversation.state_data, "quantity")
-    refute Map.has_key?(backed.conversation.state_data, "buyer_name")
-    refute Map.has_key?(backed.conversation.state_data, "buyer_email")
+    assert backed.conversation.state == "main_menu"
+    assert backed.response_body =~ "Koop kaartjies"
+    assert_flow_fields_absent(backed.conversation.state_data)
+    refute_enqueued(worker: SendWhatsAppPaymentLinkWorker)
   end
 
-  test "0 from collecting_email returns to buyer name", %{
-    conversation: conversation,
-    event: event,
-    offer: offer
+  test "0 from collecting_email returns to main menu", %{
+    conversation: conversation
   } do
     result =
       conversation
@@ -1934,16 +2108,13 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
 
     assert {:ok, backed} = handle(result.conversation, "0", "wamid.back-name-8")
 
-    assert backed.conversation.state == "collecting_buyer_name"
-    assert backed.response_body =~ "Stuur asseblief jou naam"
-    assert backed.conversation.state_data["selected_event_id"] == event.id
-    assert backed.conversation.state_data["selected_offer_id"] == offer.id
-    assert backed.conversation.state_data["quantity"] == 2
-    refute Map.has_key?(backed.conversation.state_data, "buyer_name")
-    refute Map.has_key?(backed.conversation.state_data, "buyer_email")
+    assert backed.conversation.state == "main_menu"
+    assert backed.response_body =~ "Koop kaartjies"
+    assert_flow_fields_absent(backed.conversation.state_data)
+    refute_enqueued(worker: SendWhatsAppPaymentLinkWorker)
   end
 
-  test "0 from confirming_order returns to email collection", %{conversation: conversation} do
+  test "0 from confirming_order returns to main menu", %{conversation: conversation} do
     result =
       conversation
       |> progress("hi", "back-email-1")
@@ -1959,13 +2130,9 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
 
     assert {:ok, backed} = handle(result.conversation, "0", "wamid.back-email-9")
 
-    assert backed.conversation.state == "collecting_email"
-    assert backed.response_body =~ "Stuur jou e-posadres"
-    assert backed.conversation.state_data["buyer_name"] == "Jan Burger"
-    refute Map.has_key?(backed.conversation.state_data, "buyer_email")
-    refute Map.has_key?(backed.conversation.state_data, "sales_order_id")
-    refute Map.has_key?(backed.conversation.state_data, "payment_attempt_id")
-    refute Map.has_key?(backed.conversation.state_data, "order_public_reference")
+    assert backed.conversation.state == "main_menu"
+    assert backed.response_body =~ "Koop kaartjies"
+    assert_flow_fields_absent(backed.conversation.state_data)
     refute_enqueued(worker: SendWhatsAppPaymentLinkWorker)
   end
 
@@ -2321,9 +2488,16 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
              )
 
     assert {:ok, at_quantity} = handle(at_buyer_name.conversation, "0", "fresh-cap-back-7")
-    assert at_quantity.conversation.state == "collecting_quantity"
-    assert at_quantity.response_body =~ "1 tot 6"
-    refute at_quantity.response_body =~ "1 tot 12"
+    assert at_quantity.conversation.state == "main_menu"
+
+    refreshed =
+      at_quantity
+      |> progress("1", "fresh-cap-rebuy")
+      |> progress("1", "fresh-cap-event")
+      |> progress("1", "fresh-cap-offer")
+
+    assert refreshed.response_body =~ "1 tot 6"
+    refute refreshed.response_body =~ "1 tot 12"
   end
 
   test "double-digit quantity reaches payment_pending with correct order and reservation", %{
@@ -2628,8 +2802,12 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     suffix = System.unique_integer([:positive])
 
     assert {:ok, result} = handle(conversation, "0", "back-to-qty-#{suffix}")
-    assert result.conversation.state == "collecting_quantity"
+    assert result.conversation.state == "main_menu"
+
     result
+    |> progress("1", "retry-buy-#{suffix}")
+    |> progress("1", "retry-event-#{suffix}")
+    |> progress("1", "retry-offer-#{suffix}")
   end
 
   defp progress(%{conversation: conversation}, text, suffix),

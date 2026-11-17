@@ -843,6 +843,130 @@ defmodule FastCheck.Workers.WhatsAppInboundWorkerTest do
     assert length(all_enqueued(worker: FastCheck.Workers.SendWhatsAppPaymentLinkWorker)) == 1
   end
 
+  test "navigation snoozes across checkout initialization and recovers the committed order" do
+    paystack_cleanup = PaymentSupport.setup_paystack!()
+    on_exit(paystack_cleanup)
+    parent = self()
+    success = PaymentSupport.success_request_fun()
+
+    Application.put_env(:fastcheck, :paystack_request_fun, fn request ->
+      send(parent, {:initialization_started, self()})
+
+      receive do
+        :finish_initialization -> success.(request)
+      end
+    end)
+
+    Application.put_env(:fastcheck, :whatsapp_request_fun, fn _request ->
+      send(parent, {:reply_started, self()})
+
+      receive do
+        :finish_reply -> :ok
+      end
+
+      {:ok,
+       %Req.Response{
+         status: 200,
+         body: Jason.encode!(%{"messages" => [%{"id" => "wamid.fake-reply"}]})
+       }}
+    end)
+
+    for input <- ["0", "#"] do
+      event = insert_whatsapp_event!(%{name: "Overlap event", scanner_login_code: scanner_code()})
+      offer = SalesFixtures.insert_offer!(event_id: event.id, name: "Overlap offer")
+      on_exit(fn -> SalesFixtures.flush_inventory_keys(offer.id) end)
+
+      data = %{
+        "selected_event_id" => event.id,
+        "selected_event_label" => event.name,
+        "selected_offer_id" => offer.id,
+        "selected_offer_label" => offer.name,
+        "selected_offer_max_per_order" => offer.max_per_order,
+        "selected_offer_price_cents" => offer.price_cents,
+        "selected_offer_currency" => offer.currency,
+        "selected_offer_lock_version" => offer.lock_version,
+        "quantity" => 1,
+        "buyer_name" => "Overlap buyer",
+        "buyer_email" => "overlap@example.com"
+      }
+
+      conversation_id = insert_conversation!(state: "confirming_order", state_data: data)
+      {:ok, confirmation} = Crypto.encrypt("1")
+      {:ok, navigation} = Crypto.encrypt(input)
+
+      confirm_args =
+        inbound_worker_args(
+          conversation_id,
+          "wamid.overlap-confirm-#{conversation_id}",
+          confirmation
+        )
+
+      nav_args =
+        inbound_worker_args(conversation_id, "wamid.overlap-nav-#{conversation_id}", navigation)
+
+      before = sales_effect_counts()
+      %{rows: [[sessions_before]]} = Repo.query!("SELECT count(*) FROM sales_checkout_sessions")
+
+      task =
+        Task.async(fn ->
+          receive do
+            :run -> perform_job(WhatsAppInboundWorker, confirm_args)
+          end
+        end)
+
+      Sandbox.allow(Repo, self(), task.pid)
+      send(task.pid, :run)
+      assert_receive {:initialization_started, worker}, 5_000
+      assert worker == task.pid
+      assert conversation_state(conversation_id) == "confirming_order"
+      assert sales_effect_counts().orders == before.orders + 1
+      assert {:snooze, seconds} = perform_job(WhatsAppInboundWorker, nav_args)
+      assert seconds > 0
+      send(task.pid, :finish_initialization)
+      assert_receive {:reply_started, worker}, 5_000
+      assert worker == task.pid
+      assert conversation_state(conversation_id) == "payment_pending"
+      {checkpoint, _, _} = conversation_delivery_data(conversation_id)
+      order_id = checkpoint["sales_order_id"]
+      assert is_integer(order_id)
+      inventory = SalesE2EFixtures.inventory_snapshot!(offer.id)
+      assert inventory.reserved_quantity == 1
+
+      %{rows: [[public_reference]]} =
+        Repo.query!("SELECT public_reference FROM sales_orders WHERE id = $1", [order_id])
+
+      assert checkpoint["order_public_reference"] == public_reference
+      assert {:snooze, seconds} = perform_job(WhatsAppInboundWorker, nav_args)
+      assert seconds > 0
+      send(task.pid, :finish_reply)
+      assert :ok = Task.await(task, 5_000)
+
+      nav_task =
+        Task.async(fn ->
+          receive do
+            :run -> perform_job(WhatsAppInboundWorker, nav_args)
+          end
+        end)
+
+      Sandbox.allow(Repo, self(), nav_task.pid)
+      send(nav_task.pid, :run)
+      assert_receive {:reply_started, nav_worker}, 5_000
+      assert nav_worker == nav_task.pid
+      send(nav_task.pid, :finish_reply)
+      assert :ok = Task.await(nav_task, 5_000)
+      {recovered, _, _} = conversation_delivery_data(conversation_id)
+      assert conversation_state(conversation_id) == "main_menu"
+      assert recovered["sales_order_id"] == order_id
+      assert recovered["order_public_reference"] == checkpoint["order_public_reference"]
+      assert recovered["payment_attempt_id"] == checkpoint["payment_attempt_id"]
+      assert sales_effect_counts().orders == before.orders + 1
+      assert sales_effect_counts().payment_attempts == before.payment_attempts + 1
+      %{rows: [[sessions_after]]} = Repo.query!("SELECT count(*) FROM sales_checkout_sessions")
+      assert sessions_after == sessions_before + 1
+      assert SalesE2EFixtures.inventory_snapshot!(offer.id) == inventory
+    end
+  end
+
   test "checkpoint preserves event options so event selection advances to ticket offers" do
     test_pid = self()
 

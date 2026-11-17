@@ -41,11 +41,11 @@ defmodule FastCheck.Messaging.WhatsApp.PaymentStatusRenderer do
 
   @spec manual_review(String.t() | nil) :: String.t()
   def manual_review("en") do
-    "Your order needs support review.\n#. Main menu\nHelp. Contact support"
+    "Your order needs support review.\n0. Main menu\nHelp. Contact support"
   end
 
   def manual_review(_language) do
-    "Jou bestelling benodig ondersteuning.\n#. Hoofkieslys\nHelp. Kontak ondersteuning"
+    "Jou bestelling benodig ondersteuning.\n0. Hoofkieslys\nHelp. Kontak ondersteuning"
   end
 
   @spec terminal(String.t() | nil, String.t() | nil) :: String.t()
