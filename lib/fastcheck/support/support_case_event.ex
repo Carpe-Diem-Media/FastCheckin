@@ -15,6 +15,10 @@ defmodule FastCheck.Support.SupportCaseEvent do
     table("support_case_events")
     repo(FastCheck.Repo)
 
+    identity_index_names(
+      unique_customer_exit_wamid: "support_case_events_customer_exit_wamid_uidx"
+    )
+
     check_constraints do
       check_constraint(
         [:provider_account_key, :provider_message_id],

@@ -30,6 +30,24 @@ defmodule FastCheck.Support.SupportIdentityConstraintsTest do
       [:provider_account_key, :provider_message_id]
     )
 
+    assert_identity_index_name(
+      SupportMessage,
+      :unique_operator_submission,
+      "support_messages_operator_submission_uidx"
+    )
+
+    assert_identity_index_name(
+      SupportMessage,
+      :unique_customer_wamid,
+      "support_messages_customer_wamid_uidx"
+    )
+
+    assert_identity_index_name(
+      SupportCaseEvent,
+      :unique_customer_exit_wamid,
+      "support_case_events_customer_exit_wamid_uidx"
+    )
+
     assert_check_constraints(SupportMessage, [
       "support_messages_operator_identity_required",
       "support_messages_customer_identity_required"
@@ -239,6 +257,20 @@ defmodule FastCheck.Support.SupportIdentityConstraintsTest do
     assert identity = Enum.find(ResourceInfo.identities(resource), &(&1.name == name))
     assert identity.keys == keys
     assert identity.where
+  end
+
+  defp assert_identity_index_name(resource, identity_name, expected_index_name) do
+    assert PostgresInfo.identity_index_names(resource)[identity_name] == expected_index_name
+
+    assert [[^expected_index_name]] =
+             Repo.query!(
+               """
+               SELECT indexname
+               FROM pg_indexes
+               WHERE schemaname = current_schema() AND indexname = $1
+               """,
+               [expected_index_name]
+             ).rows
   end
 
   defp assert_check_constraints(resource, names) do

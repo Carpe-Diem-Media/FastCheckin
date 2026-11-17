@@ -15,6 +15,11 @@ defmodule FastCheck.Support.SupportMessage do
     table("support_messages")
     repo(FastCheck.Repo)
 
+    identity_index_names(
+      unique_operator_submission: "support_messages_operator_submission_uidx",
+      unique_customer_wamid: "support_messages_customer_wamid_uidx"
+    )
+
     check_constraints do
       check_constraint(
         [:provider_account_key, :client_submission_id],
