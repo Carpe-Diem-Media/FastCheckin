@@ -368,9 +368,10 @@ defmodule FastCheck.Support.SupportCaseTest do
       Repo.query!(
         """
         INSERT INTO support_messages
-          (support_case_id, sequence, direction, body_ciphertext, body_key_version, accepted_at,
-           inserted_at, updated_at)
-        VALUES ($1, 0, 'customer', $2, 'test-v1', now(), now(), now())
+          (support_case_id, sequence, direction, provider_account_key, provider_message_id,
+           body_ciphertext, body_key_version, accepted_at, inserted_at, updated_at)
+        VALUES ($1, 0, 'customer', 'synthetic-test-account',
+                'synthetic-wamid-invalid-sequence', $2, 'test-v1', now(), now(), now())
         """,
         [case_id, encrypted_body]
       )
@@ -464,17 +465,18 @@ defmodule FastCheck.Support.SupportCaseTest do
 
   defp insert_message!(case_id, sequence) do
     {:ok, encrypted_body} = Crypto.encrypt("synthetic support fixture")
+    provider_message_id = "synthetic-wamid-#{System.unique_integer([:positive])}"
 
     result =
       Repo.query!(
         """
         INSERT INTO support_messages
-          (support_case_id, sequence, direction, body_ciphertext, body_key_version, accepted_at,
-           inserted_at, updated_at)
-        VALUES ($1, $2, 'customer', $3, 'test-v1', now(), now(), now())
+          (support_case_id, sequence, direction, provider_account_key, provider_message_id,
+           body_ciphertext, body_key_version, accepted_at, inserted_at, updated_at)
+        VALUES ($1, $2, 'customer', 'synthetic-test-account', $3, $4, 'test-v1', now(), now(), now())
         RETURNING id
         """,
-        [case_id, sequence, encrypted_body]
+        [case_id, sequence, provider_message_id, encrypted_body]
       )
 
     [[id]] = result.rows

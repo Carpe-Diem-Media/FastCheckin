@@ -14,6 +14,20 @@ defmodule FastCheck.Support.SupportCaseEvent do
   postgres do
     table("support_case_events")
     repo(FastCheck.Repo)
+
+    identity_index_names(
+      unique_customer_exit_wamid: "support_case_events_customer_exit_wamid_uidx"
+    )
+
+    check_constraints do
+      check_constraint(
+        [:provider_account_key, :provider_message_id],
+        "support_case_events_customer_exit_identity_required",
+        message: "must be present for customer exit events"
+      )
+    end
+
+    identity_wheres_to_sql(unique_customer_exit_wamid: "event_type = 'customer_exit'")
   end
 
   actions do
@@ -76,6 +90,12 @@ defmodule FastCheck.Support.SupportCaseEvent do
     belongs_to :conversation_closure, FastCheck.Support.ConversationClosure do
       source_attribute(:conversation_closure_id)
       attribute_type(:integer)
+    end
+  end
+
+  identities do
+    identity :unique_customer_exit_wamid, [:provider_account_key, :provider_message_id] do
+      where(expr(event_type == "customer_exit"))
     end
   end
 end
