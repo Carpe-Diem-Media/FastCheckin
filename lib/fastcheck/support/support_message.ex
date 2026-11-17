@@ -14,6 +14,25 @@ defmodule FastCheck.Support.SupportMessage do
   postgres do
     table("support_messages")
     repo(FastCheck.Repo)
+
+    check_constraints do
+      check_constraint(
+        [:provider_account_key, :client_submission_id],
+        "support_messages_operator_identity_required",
+        message: "must be present for operator messages"
+      )
+
+      check_constraint(
+        [:provider_account_key, :provider_message_id],
+        "support_messages_customer_identity_required",
+        message: "must be present for customer messages"
+      )
+    end
+
+    identity_wheres_to_sql(
+      unique_operator_submission: "direction = 'operator'",
+      unique_customer_wamid: "direction = 'customer'"
+    )
   end
 
   actions do
@@ -67,6 +86,16 @@ defmodule FastCheck.Support.SupportMessage do
 
     has_many :operations, FastCheck.Support.ExternalCreateOperation do
       destination_attribute(:support_message_id)
+    end
+  end
+
+  identities do
+    identity :unique_operator_submission, [:provider_account_key, :client_submission_id] do
+      where(expr(direction == "operator"))
+    end
+
+    identity :unique_customer_wamid, [:provider_account_key, :provider_message_id] do
+      where(expr(direction == "customer"))
     end
   end
 end
