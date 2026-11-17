@@ -71,15 +71,21 @@ defmodule FastCheck.Support.SupportDomainTest do
     assert failure_class.constraints[:max_length] == 64
   end
 
-  test "does not expose implicit CRUD actions before guarded actions are implemented" do
+  test "exposes only the approved private lifecycle mutation actions" do
+    expected_mutations = %{
+      SupportCase => [:create_waiting, :claim, :release, :customer_cancel],
+      SupportCaseEvent => [:record_lifecycle_event]
+    }
+
     for resource <- @resources do
       mutating_actions =
         resource
         |> ResourceInfo.actions()
         |> Enum.filter(&(&1.type in [:create, :update, :destroy]))
+        |> Enum.map(& &1.name)
 
-      assert mutating_actions == [],
-             "#{inspect(resource)} must not expose unguarded mutation actions"
+      assert mutating_actions == Map.get(expected_mutations, resource, []),
+             "#{inspect(resource)} exposes an unapproved lifecycle mutation"
     end
   end
 

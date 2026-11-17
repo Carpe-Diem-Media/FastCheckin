@@ -2,8 +2,9 @@ defmodule FastCheck.Support.SupportCaseEvent do
   @moduledoc """
   Append-only audit record for a support case.
 
-  This schema exposes no actions; event creation is added only alongside the
-  guarded domain transitions that own each event.
+  Lifecycle events are inserted only through a private create action invoked by
+  their parent SupportCase transaction. There are no update, destroy, or read
+  actions.
   """
 
   use Ash.Resource,
@@ -32,6 +33,32 @@ defmodule FastCheck.Support.SupportCaseEvent do
 
   actions do
     defaults([])
+
+    create :record_lifecycle_event do
+      public?(false)
+      transaction?(true)
+
+      accept([
+        :support_case_id,
+        :sequence,
+        :event_type,
+        :actor_type,
+        :actor_id,
+        :provider_account_key,
+        :provider_message_id,
+        :case_version,
+        :metadata
+      ])
+    end
+  end
+
+  policies do
+    policy action(:record_lifecycle_event) do
+      access_type(:strict)
+      authorize_if({FastCheck.Support.SupportCase.Checks, kind: :intake})
+      authorize_if({FastCheck.Support.SupportCase.Checks, kind: :operator})
+      authorize_if({FastCheck.Support.SupportCase.Checks, kind: :customer_exit})
+    end
   end
 
   attributes do
