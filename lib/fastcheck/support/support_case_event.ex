@@ -2,8 +2,9 @@ defmodule FastCheck.Support.SupportCaseEvent do
   @moduledoc """
   Append-only audit record for a support case.
 
-  This schema exposes no actions; event creation is added only alongside the
-  guarded domain transitions that own each event.
+  Lifecycle events are inserted only by the parent SupportCase transition while
+  its state change is in the same transaction. This resource exposes no Ash
+  actions.
   """
 
   use Ash.Resource,
