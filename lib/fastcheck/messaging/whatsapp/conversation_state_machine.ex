@@ -105,7 +105,8 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
     end
   end
 
-  defp dispatch_with_commercial_order_guard(command, conversation, {:ok, :restart}) do
+  defp dispatch_with_commercial_order_guard(command, conversation, {:ok, action})
+       when action in [:restart, :back] do
     recover_to_menu(command, conversation)
   end
 
@@ -169,7 +170,16 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
     data =
       if order do
         data
-        |> Map.merge(Map.take(state_data(conversation), ["purchase_flow_id"]))
+        |> Map.merge(
+          Map.take(
+            state_data(conversation),
+            ["purchase_flow_id"] ++
+              if(state_data(conversation)["sales_order_id"] == order.id,
+                do: ["payment_attempt_id"],
+                else: []
+              )
+          )
+        )
         |> Map.merge(%{
           "sales_order_id" => order.id,
           "order_public_reference" => order.public_reference,

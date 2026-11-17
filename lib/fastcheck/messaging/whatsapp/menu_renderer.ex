@@ -20,8 +20,7 @@ defmodule FastCheck.Messaging.WhatsApp.MenuRenderer do
       render_options_block([
         "1. #{Copy.text(language, :buy_tickets)}",
         "2. #{Copy.text(language, :help)}",
-        "3. #{Copy.text(language, :resend_ticket)}",
-        "0. #{Copy.text(language, :back)}"
+        "3. #{Copy.text(language, :resend_ticket)}"
       ])
     ]
     |> Enum.join("\n")
@@ -48,8 +47,7 @@ defmodule FastCheck.Messaging.WhatsApp.MenuRenderer do
             )
         ),
         "3. #{Copy.text(language, :resend_ticket)}",
-        "4. #{Copy.text(language, :help)}",
-        restart_line(language)
+        "4. #{Copy.text(language, :help)}"
       ])
     ]
     |> Enum.join("\n")
@@ -63,7 +61,7 @@ defmodule FastCheck.Messaging.WhatsApp.MenuRenderer do
   def cancellation_confirmation("en") do
     [
       "Cancel this unpaid order?",
-      render_options_block(["1. Yes, cancel and start over", "0. Back", "#. Main menu"])
+      render_options_block(["1. Yes, cancel and start over", restart_line("en")])
     ]
     |> Enum.join("\n")
   end
@@ -71,7 +69,7 @@ defmodule FastCheck.Messaging.WhatsApp.MenuRenderer do
   def cancellation_confirmation(_language) do
     [
       "Wil jy hierdie onbetaalde bestelling kanselleer?",
-      render_options_block(["1. Ja, kanselleer en begin oor", "0. Terug", "#. Hoofkieslys"])
+      render_options_block(["1. Ja, kanselleer en begin oor", restart_line("af")])
     ]
     |> Enum.join("\n")
   end
@@ -273,11 +271,9 @@ defmodule FastCheck.Messaging.WhatsApp.MenuRenderer do
     |> Enum.join("\n")
   end
 
-  defp back_line(language), do: "0. #{Copy.text(language, :back)}"
+  defp restart_line(language), do: "0. #{Copy.text(language, :restart_main_menu)}"
 
-  defp restart_line(language), do: "#. #{Copy.text(language, :restart_main_menu)}"
-
-  defp navigation_lines(language), do: [back_line(language), restart_line(language)]
+  defp navigation_lines(language), do: [restart_line(language)]
 
   defp render_options_block(rows) do
     options =

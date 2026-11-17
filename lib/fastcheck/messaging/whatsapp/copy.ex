@@ -19,7 +19,7 @@ defmodule FastCheck.Messaging.WhatsApp.Copy do
   defp af(:resend_ticket), do: "Stuur my kaartjie weer"
   defp af(:help), do: "Hulp"
   defp af(:back), do: "Terug"
-  defp af(:restart_main_menu), do: "Terug na hoof kieslys"
+  defp af(:restart_main_menu), do: "Hoofkieslys"
   defp af(:choose_event), do: "Kies 'n geleentheid:"
   defp af(:choose_ticket_type), do: "Kies 'n kaartjie tipe:"
   defp af(:quantity), do: "Hoeveel kaartjies wil jy koop?"
@@ -84,7 +84,7 @@ defmodule FastCheck.Messaging.WhatsApp.Copy do
   defp af(:support),
     do: "Antwoord met 1 om kaartjies te koop, of kontak ondersteuning as jy hulp nodig het."
 
-  defp af(:cancelled), do: "Die gesprek is gekanselleer. Antwoord # om weer te begin."
+  defp af(:cancelled), do: "Die gesprek is gekanselleer. Antwoord 0 om weer te begin."
   defp af(_key), do: "Antwoord asseblief met 'n geldige opsie."
 
   defp en(:main_menu_title), do: "Choose an option:"
@@ -92,7 +92,7 @@ defmodule FastCheck.Messaging.WhatsApp.Copy do
   defp en(:resend_ticket), do: "Re-send my ticket"
   defp en(:help), do: "Help"
   defp en(:back), do: "Back"
-  defp en(:restart_main_menu), do: "Back to main menu"
+  defp en(:restart_main_menu), do: "Main menu"
   defp en(:choose_event), do: "Choose an event:"
   defp en(:choose_ticket_type), do: "Choose a ticket type:"
   defp en(:quantity), do: "How many tickets do you want to buy?"
@@ -150,6 +150,6 @@ defmodule FastCheck.Messaging.WhatsApp.Copy do
     do: "This ticket offer has changed. Please choose the current ticket again before continuing."
 
   defp en(:support), do: "Reply with 1 to buy tickets, or contact support if you need help."
-  defp en(:cancelled), do: "The conversation has been cancelled. Reply # to start again."
+  defp en(:cancelled), do: "The conversation has been cancelled. Reply 0 to start again."
   defp en(_key), do: "Please reply with a valid option."
 end
