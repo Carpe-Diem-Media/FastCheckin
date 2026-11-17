@@ -1765,6 +1765,150 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     end
   end
 
+  test "recovery drops foreign and replaced payment attempt hints", %{event: event, offer: offer} do
+    conversation = insert_conversation!(state: "payment_pending")
+
+    order =
+      create_active_order!(conversation, event, offer, "checkpoint-current-#{conversation.id}")
+
+    other_conversation = insert_conversation!(state: "payment_pending")
+
+    other_order =
+      create_active_order!(
+        other_conversation,
+        event,
+        offer,
+        "checkpoint-other-#{other_conversation.id}"
+      )
+
+    foreign = PaymentSupport.insert_initialized_attempt!(other_order)
+
+    foreign_hint = %{
+      conversation
+      | state_data: %{"sales_order_id" => order.id, "payment_attempt_id" => foreign.id}
+    }
+
+    assert {:ok, recovered} = handle(foreign_hint, "0", "wamid.foreign-attempt")
+    assert recovered.conversation.state_data["sales_order_id"] == order.id
+    refute Map.has_key?(recovered.conversation.state_data, "payment_attempt_id")
+
+    session_id =
+      Repo.one!(
+        from s in "sales_checkout_sessions", where: s.sales_order_id == ^order.id, select: s.id
+      )
+
+    key = "paystack:init:#{order.id}:#{session_id}"
+
+    failed =
+      FastCheck.Sales.PaymentAttempt
+      |> Changeset.for_create(
+        :create_initializing,
+        %{
+          sales_order_id: order.id,
+          provider: "paystack",
+          provider_reference: "failed-#{order.id}",
+          idempotency_key: key,
+          amount_cents: order.total_amount_cents,
+          currency: order.currency
+        },
+        actor: SalesFixtures.system_actor()
+      )
+      |> Ash.create!(authorize?: false)
+      |> Changeset.for_update(:mark_failed, %{failure_code: "test"},
+        actor: SalesFixtures.system_actor()
+      )
+      |> Ash.update!(authorize?: false)
+
+    replacement = PaymentSupport.insert_initialized_attempt!(order, %{idempotency_key: key})
+
+    stale_hint = %{
+      recovered.conversation
+      | state_data: Map.put(recovered.conversation.state_data, "payment_attempt_id", failed.id)
+    }
+
+    assert {:ok, refreshed} = handle(stale_hint, "#", "wamid.replaced-attempt")
+    assert refreshed.conversation.state_data["sales_order_id"] == order.id
+    refute refreshed.conversation.state_data["payment_attempt_id"] == failed.id
+    assert replacement.id != failed.id
+  end
+
+  test "recovery drops a stale initializing attempt and a prior order checkpoint", %{
+    event: event,
+    offer: offer
+  } do
+    conversation = insert_conversation!(state: "payment_pending")
+
+    old_order =
+      create_active_order!(conversation, event, offer, "old-checkpoint-#{conversation.id}")
+
+    session_id =
+      Repo.one!(
+        from s in "sales_checkout_sessions",
+          where: s.sales_order_id == ^old_order.id,
+          select: s.id
+      )
+
+    attempt =
+      FastCheck.Sales.PaymentAttempt
+      |> Changeset.for_create(
+        :create_initializing,
+        %{
+          sales_order_id: old_order.id,
+          provider: "paystack",
+          provider_reference: "initializing-#{old_order.id}",
+          idempotency_key: "paystack:init:#{old_order.id}:#{session_id}",
+          amount_cents: old_order.total_amount_cents,
+          currency: old_order.currency
+        },
+        actor: SalesFixtures.system_actor()
+      )
+      |> Ash.create!(authorize?: false)
+
+    Application.put_env(:fastcheck, :paystack_initializing_stale_after_seconds, 0)
+
+    hinted = %{
+      conversation
+      | state_data: %{"sales_order_id" => old_order.id, "payment_attempt_id" => attempt.id}
+    }
+
+    assert {:ok, result} = handle(hinted, "0", "wamid.stale-initializing")
+    refute Map.has_key?(result.conversation.state_data, "payment_attempt_id")
+
+    other_conversation = insert_conversation!(state: "payment_pending")
+
+    prior_order =
+      create_active_order!(
+        other_conversation,
+        event,
+        offer,
+        "prior-checkpoint-#{other_conversation.id}"
+      )
+
+    assert {:ok, _} =
+             FastCheck.Sales.CheckoutExpiry.cancel_order(prior_order.id, other_conversation.id)
+
+    new_order =
+      create_active_order!(
+        other_conversation,
+        event,
+        offer,
+        "new-checkpoint-#{other_conversation.id}"
+      )
+
+    prior_hint = %{
+      other_conversation
+      | state_data: %{"sales_order_id" => prior_order.id, "payment_attempt_id" => attempt.id}
+    }
+
+    assert {:ok, recovered} = handle(prior_hint, "#", "wamid.replaced-order")
+    assert recovered.conversation.state_data["sales_order_id"] == new_order.id
+
+    assert recovered.conversation.state_data["order_public_reference"] ==
+             new_order.public_reference
+
+    refute Map.has_key?(recovered.conversation.state_data, "payment_attempt_id")
+  end
+
   test "main menu Buy and Resend cannot bypass a hidden active Order", %{
     event: event,
     offer: offer

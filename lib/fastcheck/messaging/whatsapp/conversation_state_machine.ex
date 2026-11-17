@@ -26,7 +26,9 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
   alias FastCheck.Messaging.WhatsApp.TicketLinkRenderer
   alias FastCheck.Repo
   alias FastCheck.Sales.CheckoutExpiry
+  alias FastCheck.Sales.CheckoutSession
   alias FastCheck.Sales.Conversation
+  alias FastCheck.Sales.PaymentAttempt
   alias FastCheck.Sales.PurchaseLimits
   alias FastCheck.Sales.TicketOffer
 
@@ -170,16 +172,8 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
     data =
       if order do
         data
-        |> Map.merge(
-          Map.take(
-            state_data(conversation),
-            ["purchase_flow_id"] ++
-              if(state_data(conversation)["sales_order_id"] == order.id,
-                do: ["payment_attempt_id"],
-                else: []
-              )
-          )
-        )
+        |> Map.merge(Map.take(state_data(conversation), ["purchase_flow_id"]))
+        |> preserve_current_payment_attempt(conversation, order)
         |> Map.merge(%{
           "sales_order_id" => order.id,
           "order_public_reference" => order.public_reference,
@@ -209,6 +203,32 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
 
       body = if notice, do: notice <> "\n\n" <> body, else: body
       {:ok, result(conversation, body, command)}
+    end
+  end
+
+  defp preserve_current_payment_attempt(data, conversation, order) do
+    hint = state_data(conversation)["payment_attempt_id"]
+
+    with true <- state_data(conversation)["sales_order_id"] == order.id,
+         true <- is_integer(hint),
+         {:ok, %CheckoutSession{} = session} <-
+           CheckoutSession
+           |> Query.filter(sales_order_id == ^order.id)
+           |> Ash.read_one(authorize?: false),
+         key = "paystack:init:#{order.id}:#{session.id}",
+         {:ok, %PaymentAttempt{} = attempt} <-
+           PaymentAttempt
+           |> Query.for_read(:get_active_by_idempotency_key, %{idempotency_key: key})
+           |> Ash.read_one(authorize?: false),
+         true <- attempt.id == hint and attempt.sales_order_id == order.id,
+         true <-
+           attempt.amount_cents == order.total_amount_cents and attempt.currency == order.currency,
+         true <-
+           attempt.status == "initialized" and is_binary(attempt.authorization_url) and
+             attempt.authorization_url != "" do
+      Map.put(data, "payment_attempt_id", hint)
+    else
+      _ -> data
     end
   end
 
