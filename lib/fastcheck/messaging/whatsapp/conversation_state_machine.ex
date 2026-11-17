@@ -1511,8 +1511,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
 
   defp language(_conversation), do: "af"
 
-  defp valid_email?(email) when is_binary(email), do: Regex.match?(~r/^[^\s@]+@[^\s@]+$/, email)
-  defp valid_email?(_email), do: false
+  defp valid_email?(email), do: match?({:ok, _}, ResendFlow.normalize_email(email))
 
   defp session_ttl_seconds do
     Application.get_env(:fastcheck, :whatsapp_session_ttl_seconds, @session_ttl_seconds)

@@ -1177,18 +1177,39 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     assert result.response_body =~ "e-posadres"
     assert result.response_body =~ "0. Hoofkieslys"
 
+    invalid_inputs = ["1", "", "invalid", "a@", "review@.", "review@example."]
+
     result =
-      Enum.reduce(["1", "", "invalid", "a@"], result, fn input, previous ->
+      Enum.reduce(invalid_inputs, result, fn input, previous ->
         next = progress(previous.conversation, input, "required-email-#{inspect(input)}")
         assert next.conversation.state == "collecting_email"
         assert next.response_body =~ "0. Hoofkieslys"
         refute next.response_body =~ "Bevestig jou bestelling"
+        refute next.conversation.state_data["buyer_email"]
         next
       end)
 
-    result = progress(result.conversation, "jan@example.com", "required-email-valid")
+    assert Repo.aggregate(from(o in "sales_orders"), :count) == 0
+    assert Repo.aggregate(from(s in "sales_checkout_sessions"), :count) == 0
+    assert Repo.aggregate(from(p in "sales_payment_attempts"), :count) == 0
+    refute_enqueued(worker: SendWhatsAppPaymentLinkWorker)
+    refute_enqueued(worker: SendWhatsAppTicketLinkWorker)
+
+    result = progress(result.conversation, "Jan@Example.com", "required-email-valid")
     assert result.conversation.state == "confirming_order"
-    assert result.response_body =~ "E-pos: jan@example.com"
+    assert result.conversation.state_data["buyer_email"] == "Jan@Example.com"
+    assert result.response_body =~ "E-pos: Jan@Example.com"
+
+    for hidden_field <- [
+          "https://",
+          "payment_url",
+          "ticket_url",
+          "access_code",
+          "provider",
+          "token"
+        ] do
+      refute result.response_body =~ hidden_field
+    end
   end
 
   test "ticket type menu renders prices for multiple active offers without exposing ids", %{
