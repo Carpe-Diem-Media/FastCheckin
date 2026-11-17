@@ -1161,46 +1161,55 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     refute_enqueued(worker: SendWhatsAppPaymentLinkWorker)
   end
 
-  test "confirmation summary renders skipped email without exposing hidden fields", %{
+  test "email is required before confirmation and invalid input can be retried", %{
     conversation: conversation
   } do
     result =
       conversation
-      |> progress("hi", "skip-email-1")
-      |> progress("1", "skip-email-2")
-      |> progress("1", "skip-email-3")
-      |> progress("1", "skip-email-4")
-      |> progress("1", "skip-email-5")
-      |> progress("2", "skip-email-6")
-      |> progress("Jan Burger", "skip-email-7")
-      |> progress("1", "skip-email-8")
+      |> progress("hi", "required-email-1")
+      |> progress("1", "required-email-2")
+      |> progress("1", "required-email-3")
+      |> progress("1", "required-email-4")
+      |> progress("1", "required-email-5")
+      |> progress("2", "required-email-6")
+      |> progress("Jan Burger", "required-email-7")
 
+    assert result.response_body =~ "e-posadres"
+    assert result.response_body =~ "0. Hoofkieslys"
+
+    invalid_inputs = ["1", "", "invalid", "a@", "review@.", "review@example."]
+
+    result =
+      Enum.reduce(invalid_inputs, result, fn input, previous ->
+        next = progress(previous.conversation, input, "required-email-#{inspect(input)}")
+        assert next.conversation.state == "collecting_email"
+        assert next.response_body =~ "0. Hoofkieslys"
+        refute next.response_body =~ "Bevestig jou bestelling"
+        refute next.conversation.state_data["buyer_email"]
+        next
+      end)
+
+    assert Repo.aggregate(from(o in "sales_orders"), :count) == 0
+    assert Repo.aggregate(from(s in "sales_checkout_sessions"), :count) == 0
+    assert Repo.aggregate(from(p in "sales_payment_attempts"), :count) == 0
+    refute_enqueued(worker: SendWhatsAppPaymentLinkWorker)
+    refute_enqueued(worker: SendWhatsAppTicketLinkWorker)
+
+    result = progress(result.conversation, "Jan@Example.com", "required-email-valid")
     assert result.conversation.state == "confirming_order"
+    assert result.conversation.state_data["buyer_email"] == "Jan@Example.com"
+    assert result.response_body =~ "E-pos: Jan@Example.com"
 
-    assert result.response_body ==
-             [
-               "Bevestig jou bestelling:",
-               "Naam: Jan Burger",
-               "E-pos: Nie verskaf nie",
-               "Geleentheid: Voelgoed Live",
-               "Kaartjie: General - R10",
-               "Aantal: 2",
-               "Totaal betaalbaar: R20",
-               "",
-               "Is hierdie korrek? Gaan voort na betaling.",
-               "```",
-               "1. OK",
-               "0. Hoofkieslys",
-               "```"
-             ]
-             |> Enum.join("\n")
-
-    refute result.response_body =~ "https://"
-    refute result.response_body =~ "payment_url"
-    refute result.response_body =~ "ticket_url"
-    refute result.response_body =~ "access_code"
-    refute result.response_body =~ "provider"
-    refute result.response_body =~ "token"
+    for hidden_field <- [
+          "https://",
+          "payment_url",
+          "ticket_url",
+          "access_code",
+          "provider",
+          "token"
+        ] do
+      refute result.response_body =~ hidden_field
+    end
   end
 
   test "ticket type menu renders prices for multiple active offers without exposing ids", %{
