@@ -24,7 +24,11 @@ defmodule FastCheck.Messaging.WhatsApp.Copy do
   defp af(:choose_ticket_type), do: "Kies 'n kaartjie tipe:"
   defp af(:quantity), do: "Hoeveel kaartjies wil jy koop?"
   defp af(:buyer_name), do: "Stuur asseblief jou naam."
-  defp af(:email), do: "Stuur jou e-posadres, of antwoord 1 om oor te slaan."
+
+  defp af(:email),
+    do:
+      "Stuur asseblief jou e-posadres. Dit word benodig vir betaling en veilige herstuur van kaartjies."
+
   defp af(:resend_name), do: "Stuur asseblief die naam wat vir die kaartjiebestelling gebruik is."
 
   defp af(:resend_email),
@@ -97,7 +101,10 @@ defmodule FastCheck.Messaging.WhatsApp.Copy do
   defp en(:choose_ticket_type), do: "Choose a ticket type:"
   defp en(:quantity), do: "How many tickets do you want to buy?"
   defp en(:buyer_name), do: "Please send your name."
-  defp en(:email), do: "Send your email address, or reply 1 to skip."
+
+  defp en(:email),
+    do: "Please send your email address. It is required for checkout and secure ticket resend."
+
   defp en(:resend_name), do: "Please send the name used for the ticket order."
   defp en(:resend_email), do: "Please send the email address used for the ticket order."
   defp en(:resend_invalid_email), do: "Please send a valid email address."

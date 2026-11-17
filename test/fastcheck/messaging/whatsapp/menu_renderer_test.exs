@@ -197,6 +197,13 @@ defmodule FastCheck.Messaging.WhatsApp.MenuRendererTest do
 
       english_email = MenuRenderer.email_prompt("en")
 
+      assert email =~ "benodig vir betaling en veilige herstuur"
+      assert english_email =~ "required for checkout and secure ticket resend"
+      refute email =~ "oor te slaan"
+      refute english_email =~ "skip"
+      assert Enum.count(String.split(email, "```")) == 3
+      assert Enum.count(String.split(english_email, "```")) == 3
+
       assert english_email =~ "0. Main menu"
       refute english_email =~ "#."
 

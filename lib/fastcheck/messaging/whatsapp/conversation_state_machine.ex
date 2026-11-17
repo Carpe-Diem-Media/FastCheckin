@@ -741,16 +741,6 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
     end
   end
 
-  defp dispatch(command, conversation, {:ok, {:number, 1}})
-       when conversation.state == "collecting_email" do
-    with {:ok, conversation} <-
-           transition(command, conversation, :skip_optional_email_after_name, %{
-             state_data: Map.put(state_data(conversation), "buyer_email", nil)
-           }) do
-      {:ok, result(conversation, confirm_menu(conversation), command)}
-    end
-  end
-
   defp dispatch(command, conversation, {:ok, {:text, email}})
        when conversation.state == "collecting_email" do
     if valid_email?(email) do

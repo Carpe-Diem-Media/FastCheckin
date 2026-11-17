@@ -1161,46 +1161,34 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     refute_enqueued(worker: SendWhatsAppPaymentLinkWorker)
   end
 
-  test "confirmation summary renders skipped email without exposing hidden fields", %{
+  test "email is required before confirmation and invalid input can be retried", %{
     conversation: conversation
   } do
     result =
       conversation
-      |> progress("hi", "skip-email-1")
-      |> progress("1", "skip-email-2")
-      |> progress("1", "skip-email-3")
-      |> progress("1", "skip-email-4")
-      |> progress("1", "skip-email-5")
-      |> progress("2", "skip-email-6")
-      |> progress("Jan Burger", "skip-email-7")
-      |> progress("1", "skip-email-8")
+      |> progress("hi", "required-email-1")
+      |> progress("1", "required-email-2")
+      |> progress("1", "required-email-3")
+      |> progress("1", "required-email-4")
+      |> progress("1", "required-email-5")
+      |> progress("2", "required-email-6")
+      |> progress("Jan Burger", "required-email-7")
 
+    assert result.response_body =~ "e-posadres"
+    assert result.response_body =~ "0. Hoofkieslys"
+
+    result =
+      Enum.reduce(["1", "", "invalid", "a@"], result, fn input, previous ->
+        next = progress(previous.conversation, input, "required-email-#{inspect(input)}")
+        assert next.conversation.state == "collecting_email"
+        assert next.response_body =~ "0. Hoofkieslys"
+        refute next.response_body =~ "Bevestig jou bestelling"
+        next
+      end)
+
+    result = progress(result.conversation, "jan@example.com", "required-email-valid")
     assert result.conversation.state == "confirming_order"
-
-    assert result.response_body ==
-             [
-               "Bevestig jou bestelling:",
-               "Naam: Jan Burger",
-               "E-pos: Nie verskaf nie",
-               "Geleentheid: Voelgoed Live",
-               "Kaartjie: General - R10",
-               "Aantal: 2",
-               "Totaal betaalbaar: R20",
-               "",
-               "Is hierdie korrek? Gaan voort na betaling.",
-               "```",
-               "1. OK",
-               "0. Hoofkieslys",
-               "```"
-             ]
-             |> Enum.join("\n")
-
-    refute result.response_body =~ "https://"
-    refute result.response_body =~ "payment_url"
-    refute result.response_body =~ "ticket_url"
-    refute result.response_body =~ "access_code"
-    refute result.response_body =~ "provider"
-    refute result.response_body =~ "token"
+    assert result.response_body =~ "E-pos: jan@example.com"
   end
 
   test "ticket type menu renders prices for multiple active offers without exposing ids", %{
