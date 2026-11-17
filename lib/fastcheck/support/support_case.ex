@@ -85,7 +85,6 @@ defmodule FastCheck.Support.SupportCase do
   alias FastCheck.Messaging.WhatsApp.Config
   alias FastCheck.Repo
   alias FastCheck.Support.SupportCase.Checks
-  alias FastCheck.Support.SupportCaseEvent
 
   postgres do
     table("support_cases")
@@ -148,7 +147,6 @@ defmodule FastCheck.Support.SupportCase do
       argument(:expected_lock_version, :integer, allow_nil?: false)
 
       change(&prepare_transition(&1, &2, :customer_cancel))
-      change(optimistic_lock(:lock_version))
     end
   end
 
@@ -281,14 +279,13 @@ defmodule FastCheck.Support.SupportCase do
   end
 
   defp prepare_transition(changeset, %{actor: actor}, action) do
-    from_state = Changeset.get_data(changeset, :state)
-
     Changeset.before_action(changeset, fn changeset ->
       case lock_and_validate_transition(changeset, actor, action) do
-        {:ok, account_key} ->
+        {:ok, support_case, account_key} ->
           changeset
           |> Changeset.put_context(:support_case_account_key, account_key)
-          |> apply_transition(actor, action)
+          |> Changeset.put_context(:support_case_from_state, support_case.state)
+          |> apply_transition(actor, action, support_case)
 
         {:error, reason} ->
           add_lifecycle_error(changeset, reason)
@@ -297,6 +294,7 @@ defmodule FastCheck.Support.SupportCase do
     |> Changeset.after_action(fn changeset, record ->
       event_type = transition_event(action)
       account_key = changeset.context[:support_case_account_key]
+      from_state = changeset.context[:support_case_from_state]
       append_event(record, actor, event_type, from_state, record.state, account_key)
     end)
   end
@@ -330,10 +328,12 @@ defmodule FastCheck.Support.SupportCase do
          true <- conversation.wa_id == wa_id,
          :ok <- verify_conversation_identity(identity, conversation, action),
          {:ok, support_case} <- lock_case(Changeset.get_data(changeset, :id), conversation_id),
-         :ok <- verify_versions(expected_version, data_version, support_case.lock_version),
+         :ok <-
+           verify_versions(expected_version, data_version, support_case.lock_version, action),
          {:ok, account_key} <- verify_case_account(support_case.id, identity),
+         :ok <- validate_customer_exit_message(identity, action),
          :ok <- validate_state_and_actor(support_case, identity, action) do
-      {:ok, account_key}
+      {:ok, support_case, account_key}
     else
       false -> {:error, :conversation_identity_mismatch}
       {:error, reason} -> {:error, reason}
@@ -359,15 +359,40 @@ defmodule FastCheck.Support.SupportCase do
 
   defp verify_conversation_identity(_identity, _conversation, _action), do: :ok
 
-  defp verify_versions(expected, data_version, actual)
-       when expected == data_version and expected == actual,
+  defp verify_versions(expected, data_version, actual, action)
+       when action in [:claim, :release] and expected == data_version and expected == actual,
        do: :ok
 
-  defp verify_versions(_expected, _data_version, _actual), do: {:error, :stale_case_version}
+  defp verify_versions(expected, data_version, actual, :customer_cancel)
+       when is_integer(expected) and expected == data_version and expected <= actual,
+       do: :ok
+
+  defp verify_versions(_expected, _data_version, _actual, _action),
+    do: {:error, :stale_case_version}
+
+  defp validate_customer_exit_message(%{kind: :customer_exit} = identity, :customer_cancel) do
+    case Repo.query!(
+           """
+           SELECT 1
+           FROM support_case_events
+           WHERE event_type = 'customer_exit'
+             AND provider_account_key = $1
+             AND provider_message_id = $2
+           LIMIT 1
+           """,
+           [identity.provider_account_key, identity.provider_message_id]
+         ).rows do
+      [] -> :ok
+      _ -> {:error, :customer_exit_replayed}
+    end
+  end
+
+  defp validate_customer_exit_message(_identity, _action), do: :ok
 
   defp verify_case_account(case_id, identity) do
     with {:ok, account_key} <- intake_account_key(case_id),
-         configured_account when is_binary(configured_account) <- Config.get().business_account_id,
+         configured_account when is_binary(configured_account) <-
+           Config.get().business_account_id,
          true <- account_key == configured_account,
          true <- identity_account(identity) == account_key do
       {:ok, account_key}
@@ -394,7 +419,7 @@ defmodule FastCheck.Support.SupportCase do
       else: {:error, :case_not_cancellable}
   end
 
-  defp apply_transition(changeset, actor, :claim) do
+  defp apply_transition(changeset, actor, :claim, _locked_case) do
     username = Checks.operator_username(actor)
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -404,41 +429,50 @@ defmodule FastCheck.Support.SupportCase do
     |> Changeset.force_change_attribute(:claimed_at, now)
   end
 
-  defp apply_transition(changeset, _actor, :release) do
+  defp apply_transition(changeset, _actor, :release, _locked_case) do
     changeset
     |> Changeset.force_change_attribute(:state, "waiting")
     |> Changeset.force_change_attribute(:assigned_operator_id, nil)
     |> Changeset.force_change_attribute(:claimed_at, nil)
   end
 
-  defp apply_transition(changeset, _actor, :customer_cancel) do
+  defp apply_transition(changeset, _actor, :customer_cancel, locked_case) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     Changeset.force_change_attribute(changeset, :state, "cancelled")
     |> Changeset.force_change_attribute(:cancelled_at, now)
+    |> Changeset.force_change_attribute(:assigned_operator_id, locked_case.assigned_operator_id)
+    |> Changeset.force_change_attribute(:claimed_at, locked_case.claimed_at)
+    |> Changeset.force_change_attribute(:lock_version, locked_case.lock_version + 1)
   end
 
   defp append_event(record, actor, event_type, from_state, to_state, account_key \\ nil) do
     sequence = next_event_sequence(record.id)
 
     with {:ok, identity} <- event_identity(actor, event_type, record, account_key) do
-      attrs = %{
-        support_case_id: record.id,
-        sequence: sequence,
-        event_type: Atom.to_string(event_type),
-        actor_type: identity.actor_type,
-        actor_id: identity.actor_id,
-        provider_account_key: identity.provider_account_key,
-        provider_message_id: identity.provider_message_id,
-        case_version: record.lock_version,
-        metadata: %{from_state: from_state, to_state: to_state}
-      }
+      result =
+        Repo.query(
+          """
+          INSERT INTO support_case_events
+            (support_case_id, sequence, event_type, actor_type, actor_id, provider_account_key,
+             provider_message_id, case_version, metadata, inserted_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, now())
+          """,
+          [
+            record.id,
+            sequence,
+            Atom.to_string(event_type),
+            identity.actor_type,
+            identity.actor_id,
+            identity.provider_account_key,
+            identity.provider_message_id,
+            record.lock_version,
+            %{from_state: from_state, to_state: to_state}
+          ]
+        )
 
-      SupportCaseEvent
-      |> Changeset.for_create(:record_lifecycle_event, attrs, actor: actor)
-      |> Ash.create(authorize?: true)
-      |> case do
-        {:ok, _event} -> {:ok, record}
+      case result do
+        {:ok, _result} -> {:ok, record}
         {:error, error} -> {:error, error}
       end
     end
@@ -537,20 +571,21 @@ defmodule FastCheck.Support.SupportCase do
   defp lock_case(case_id, conversation_id) do
     case Repo.query!(
            """
-           SELECT id, conversation_id, state, assigned_operator_id, lock_version
+           SELECT id, conversation_id, state, assigned_operator_id, claimed_at, lock_version
            FROM support_cases
            WHERE id = $1 AND conversation_id = $2
            FOR UPDATE
            """,
            [case_id, conversation_id]
          ).rows do
-      [[id, conversation_id, state, assigned_operator_id, lock_version]] ->
+      [[id, conversation_id, state, assigned_operator_id, claimed_at, lock_version]] ->
         {:ok,
          %{
            id: id,
            conversation_id: conversation_id,
            state: state,
            assigned_operator_id: assigned_operator_id,
+           claimed_at: claimed_at,
            lock_version: lock_version
          }}
 

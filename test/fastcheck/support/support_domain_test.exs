@@ -74,7 +74,7 @@ defmodule FastCheck.Support.SupportDomainTest do
   test "exposes only the approved private lifecycle mutation actions" do
     expected_mutations = %{
       SupportCase => [:create_waiting, :claim, :release, :customer_cancel],
-      SupportCaseEvent => [:record_lifecycle_event]
+      SupportCaseEvent => []
     }
 
     for resource <- @resources do
