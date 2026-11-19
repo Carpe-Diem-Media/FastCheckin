@@ -90,7 +90,7 @@ defmodule FastCheck.Tickets.Resend.CanonicalEmailBackfillTest do
       SELECT 'PLAN-' || $1::text || '-' || n, $2, CASE WHEN n <= 100 THEN 'plan-fanout@example.com' ELSE 'covered' || n || '@example.com' END, CASE WHEN n <= 100 THEN 'plan-fanout@example.com' ELSE 'covered' || n || '@example.com' END, 'test', 'ticket_issued', 100, 'ZAR', now(), now()
       FROM generate_series(1, 4000) AS n
       """,
-      [seed.order_id, seed.event.id]
+      [Integer.to_string(seed.order_id), seed.event.id]
     )
 
     prefix = "PLAN-#{seed.order_id}-%"
