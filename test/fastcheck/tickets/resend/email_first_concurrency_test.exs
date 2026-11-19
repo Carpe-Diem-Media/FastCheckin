@@ -323,25 +323,43 @@ defmodule FastCheck.Tickets.Resend.EmailFirstConcurrencyTest do
   end
 
   defp await_blocked(pids, holder, deadline) do
-    blocked =
+    states =
       unboxed(fn ->
         Repo.query!(
-          "SELECT pid FROM pg_stat_activity WHERE pid = ANY($1::int[]) AND $2 = ANY(pg_blocking_pids(pid))",
-          [pids, holder]
+          "SELECT pid, pg_blocking_pids(pid), wait_event_type, wait_event FROM pg_stat_activity WHERE pid = ANY($1::int[])",
+          [pids]
         ).rows
-        |> List.flatten()
       end)
 
+    blockers = Map.new(states, fn [pid, blocked_by, _type, _event] -> {pid, blocked_by} end)
+
     cond do
-      Enum.sort(blocked) == Enum.sort(pids) ->
+      Enum.all?(pids, &blocked_by_holder?(&1, holder, blockers, MapSet.new())) ->
         :ok
 
       System.monotonic_time(:millisecond) >= deadline ->
-        flunk("contenders did not reach held database lock")
+        flunk(
+          "contenders did not reach held database lock; holder=#{holder} states=#{inspect(states)}"
+        )
 
       true ->
         Process.sleep(10)
         await_blocked(pids, holder, deadline)
+    end
+  end
+
+  # A PostgreSQL lock waiter may itself block a later waiter in the queue.
+  # Reject unknown, missing, or cyclic paths rather than accepting any blocker.
+  defp blocked_by_holder?(pid, holder, _blockers, _seen) when pid == holder, do: true
+
+  defp blocked_by_holder?(pid, holder, blockers, seen) do
+    case {Map.get(blockers, pid), MapSet.member?(seen, pid)} do
+      {blockers_for_pid, false} when is_list(blockers_for_pid) and blockers_for_pid != [] ->
+        seen = MapSet.put(seen, pid)
+        Enum.all?(blockers_for_pid, &blocked_by_holder?(&1, holder, blockers, seen))
+
+      _ ->
+        false
     end
   end
 
