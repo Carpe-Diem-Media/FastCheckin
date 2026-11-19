@@ -772,7 +772,7 @@ defmodule FastCheck.Workers.SendWhatsAppTicketLinkWorkerTest do
              )
   end
 
-  test "resend challenge is not consumed when secure ticket page is invalid after token rotation" do
+  test "resend with a non-scannable attendee stops before token rotation or delivery attempt" do
     %{conversation_id: conversation_id, order_id: order_id, ticket_issue_id: issue_id} =
       issued_ticket_fixture()
 
@@ -787,6 +787,54 @@ defmodule FastCheck.Workers.SendWhatsAppTicketLinkWorkerTest do
       ),
       set: [scan_eligibility: "not_scannable"]
     )
+
+    Application.put_env(:fastcheck, :whatsapp_request_fun, fn _request ->
+      flunk("a non-scannable ticket must not be sent")
+    end)
+
+    assert {:discard, :manual_review} =
+             perform_test_delivery(%{
+               "conversation_id" => conversation_id,
+               "sales_order_id" => order_id,
+               "ticket_issue_id" => issue_id,
+               "ticket_resend_challenge_id" => challenge.id,
+               "delivery_reason" => "verified_ticket_resend"
+             })
+
+    assert Repo.get!(TicketIssue, issue_id).delivery_token_hash == old_hash
+    assert %{status: "verified", consumed_at: nil} = resend_challenge_snapshot(challenge.id)
+
+    assert [] =
+             Repo.all(
+               from d in "sales_delivery_attempts",
+                 where: d.ticket_issue_id == ^issue_id,
+                 select: d.status
+             )
+
+    assert %{status: "manual_review", failure_reason: "ticket_delivery_resend_challenge_invalid"} =
+             Repo.one!(
+               from i in "sales_ticket_delivery_intents",
+                 where: i.ticket_resend_challenge_id == ^challenge.id,
+                 select: map(i, [:status, :failure_reason])
+             )
+  end
+
+  test "resend challenge is not consumed when secure ticket page is invalid after token rotation" do
+    %{conversation_id: conversation_id, order_id: order_id, ticket_issue_id: issue_id} =
+      issued_ticket_fixture()
+
+    challenge = verified_resend_challenge!(conversation_id, order_id, issue_id)
+    old_hash = Repo.get!(TicketIssue, issue_id).delivery_token_hash
+
+    previous_ttl = Application.fetch_env(:fastcheck, :sales_delivery_token_ttl_seconds)
+    Application.put_env(:fastcheck, :sales_delivery_token_ttl_seconds, -1)
+
+    on_exit(fn ->
+      case previous_ttl do
+        {:ok, value} -> Application.put_env(:fastcheck, :sales_delivery_token_ttl_seconds, value)
+        :error -> Application.delete_env(:fastcheck, :sales_delivery_token_ttl_seconds)
+      end
+    end)
 
     Application.put_env(:fastcheck, :whatsapp_request_fun, fn _request ->
       flunk("invalid secure ticket page must not be sent")

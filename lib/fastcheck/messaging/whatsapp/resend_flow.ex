@@ -6,9 +6,7 @@ defmodule FastCheck.Messaging.WhatsApp.ResendFlow do
   alias FastCheck.Messaging.WhatsApp.MessageCommand
   alias FastCheck.Repo
   alias FastCheck.Sales.Conversation
-  alias FastCheck.Tickets.Resend.Eligibility
   alias FastCheck.Tickets.Resend.EmailOtp
-  alias FastCheck.Tickets.Resend.Otp
   alias FastCheck.Tickets.Resend.Request
   alias FastCheck.Tickets.Resend.Result
 
@@ -48,7 +46,7 @@ defmodule FastCheck.Messaging.WhatsApp.ResendFlow do
 
         {:error, :already_verified} ->
           case with_challenge_lock(public_id, fn ->
-                 Otp.recover_verified(public_id, otp, scope)
+                 EmailOtp.recover_email_first(public_id, otp, scope)
                end) do
             {:ok, challenge} -> {:ok, :verified, verification_updates(command, challenge)}
             _ -> {:error, :already_verified}
@@ -69,16 +67,22 @@ defmodule FastCheck.Messaging.WhatsApp.ResendFlow do
     data = state_data(conversation)
 
     case challenge_public_id(data) do
-      {:ok, public_id} -> Otp.expire(public_id, {conversation.id, command, data["resend_email"]})
-      _ -> {:ok, :ok}
+      {:ok, public_id} ->
+        EmailOtp.expire_email_first(public_id, {conversation.id, command, data["resend_email"]})
+
+      _ ->
+        {:ok, :ok}
     end
   end
+
+  @doc "Checks whether eligible orders have canonical email coverage."
+  def canonical_coverage_complete?, do: EmailOtp.canonical_coverage_complete?()
 
   def candidates(%Conversation{} = conversation) do
     data = state_data(conversation)
 
-    if Eligibility.canonical_coverage_complete?() do
-      Eligibility.candidates_for_email(data["resend_email"], conversation.phone_e164)
+    if canonical_coverage_complete?() do
+      EmailOtp.candidates_for_email(data["resend_email"], conversation.phone_e164)
     else
       []
     end

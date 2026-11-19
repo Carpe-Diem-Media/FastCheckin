@@ -112,6 +112,7 @@ defmodule FastCheck.Sales.CoreResourceSkeletonsTest do
       :buyer_name,
       :buyer_phone,
       :buyer_email,
+      :buyer_email_canonical,
       :source_channel,
       :status,
       :total_amount_cents,
@@ -134,6 +135,10 @@ defmodule FastCheck.Sales.CoreResourceSkeletonsTest do
       :updated_at
     ])
 
+    assert %{public?: false, sensitive?: true} =
+             ResourceInfo.attribute(FastCheck.Sales.Order, :buyer_email_canonical)
+
+    refute :buyer_email_canonical in ResourceInfo.action(FastCheck.Sales.Order, :create_draft).accept
     assert_attribute_type(FastCheck.Sales.Order, :total_amount_cents, :integer)
     assert_relationship(FastCheck.Sales.Order, :order_lines, :has_many)
     assert_relationship(FastCheck.Sales.Order, :checkout_session, :has_one)

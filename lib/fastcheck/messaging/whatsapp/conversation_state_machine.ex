@@ -1239,7 +1239,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
   end
 
   defp verify_resend_otp(command, conversation, %{"resend_bound_ticket_id" => ticket} = updates) do
-    if FastCheck.Tickets.Resend.Eligibility.canonical_coverage_complete?() do
+    if ResendFlow.canonical_coverage_complete?() do
       case ResendFlow.bind(command, conversation, ticket) do
         {:ok, _} ->
           data =
