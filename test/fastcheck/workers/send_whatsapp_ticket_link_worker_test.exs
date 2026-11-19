@@ -534,6 +534,27 @@ defmodule FastCheck.Workers.SendWhatsAppTicketLinkWorkerTest do
     assert challenge_id == challenge.id
   end
 
+  test "expired resend challenge cannot send even when the intent was queued" do
+    %{conversation_id: conversation_id, order_id: order_id, ticket_issue_id: issue_id} =
+      issued_ticket_fixture()
+
+    challenge = verified_resend_challenge!(conversation_id, order_id, issue_id)
+    intent_id = resend_delivery_intent!(conversation_id, order_id, issue_id, challenge.id)
+
+    Repo.update_all(from(c in "sales_ticket_resend_challenges", where: c.id == ^challenge.id),
+      set: [expires_at: DateTime.add(DateTime.utc_now(), -1, :second)]
+    )
+
+    Application.put_env(:fastcheck, :whatsapp_request_fun, fn _ ->
+      flunk("expired challenge must not send")
+    end)
+
+    assert {:discard, :manual_review} =
+             perform_job(SendWhatsAppTicketLinkWorker, %{"ticket_delivery_intent_id" => intent_id})
+
+    assert resend_challenge_snapshot(challenge.id).status == "verified"
+  end
+
   test "resend challenge id with unknown delivery reason discards before side effects" do
     %{conversation_id: conversation_id, order_id: order_id, ticket_issue_id: issue_id} =
       issued_ticket_fixture()

@@ -28,6 +28,7 @@ defmodule FastCheck.Sales.ConversationStateActionsTest do
     "collecting_resend_name",
     "collecting_resend_email",
     "collecting_resend_otp",
+    "selecting_resend_ticket",
     "awaiting_verified_resend_delivery",
     "verified_resend_delivery_queued"
   ]
@@ -37,7 +38,7 @@ defmodule FastCheck.Sales.ConversationStateActionsTest do
     {:start_default_main_menu, ["new"], "main_menu"},
     {:select_language, ["selecting_language"], "main_menu"},
     {:choose_buy_tickets, ["main_menu"], "selecting_event"},
-    {:choose_resend_ticket, ["main_menu"], "collecting_resend_name"},
+    {:choose_resend_ticket, ["main_menu"], "collecting_resend_email"},
     {:select_event, ["selecting_event"], "selecting_ticket_type"},
     {:select_ticket_type, ["selecting_ticket_type"], "collecting_quantity"},
     {:submit_quantity, ["collecting_quantity"], "collecting_buyer_name"},
@@ -59,6 +60,9 @@ defmodule FastCheck.Sales.ConversationStateActionsTest do
     {:return_to_email_collection, ["confirming_order"], "collecting_email"},
     {:return_to_resend_name_collection, ["collecting_resend_email"], "collecting_resend_name"},
     {:return_to_resend_email_collection, ["collecting_resend_otp"], "collecting_resend_email"},
+    {:select_resend_candidates, ["collecting_resend_otp"], "selecting_resend_ticket"},
+    {:expire_resend_snapshot, ["selecting_resend_ticket"], "selecting_resend_ticket"},
+    {:bind_resend_ticket, ["selecting_resend_ticket"], "awaiting_verified_resend_delivery"},
     {:verify_resend_otp, ["collecting_resend_otp"], "awaiting_verified_resend_delivery"},
     {:queue_verified_resend_delivery, ["awaiting_verified_resend_delivery"],
      "verified_resend_delivery_queued"},
@@ -92,6 +96,7 @@ defmodule FastCheck.Sales.ConversationStateActionsTest do
        "collecting_resend_name",
        "collecting_resend_email",
        "collecting_resend_otp",
+       "selecting_resend_ticket",
        "awaiting_verified_resend_delivery",
        "verified_resend_delivery_queued"
      ], "main_menu"},
@@ -109,6 +114,7 @@ defmodule FastCheck.Sales.ConversationStateActionsTest do
        "collecting_resend_name",
        "collecting_resend_email",
        "collecting_resend_otp",
+       "selecting_resend_ticket",
        "awaiting_verified_resend_delivery",
        "verified_resend_delivery_queued"
      ], "cancelled"},
@@ -130,6 +136,7 @@ defmodule FastCheck.Sales.ConversationStateActionsTest do
        "collecting_resend_name",
        "collecting_resend_email",
        "collecting_resend_otp",
+       "selecting_resend_ticket",
        "awaiting_verified_resend_delivery",
        "verified_resend_delivery_queued"
      ], "manual_review"},
@@ -214,7 +221,7 @@ defmodule FastCheck.Sales.ConversationStateActionsTest do
     conversation = insert_conversation!("main_menu")
     actor = %{actor_type: :system, actor_id: "vs-24d-c-test"}
 
-    assert {:ok, name_state} =
+    assert {:ok, email_state} =
              conversation
              |> Changeset.for_update(
                :choose_resend_ticket,
@@ -224,24 +231,6 @@ defmodule FastCheck.Sales.ConversationStateActionsTest do
                  state_data: %{},
                  correlation_id: "corr-resend-action-1",
                  idempotency_key: "idem-resend-action-1",
-                 transition_metadata: %{}
-               },
-               actor: actor
-             )
-             |> Ash.update(authorize?: false)
-
-    assert name_state.state == "collecting_resend_name"
-
-    assert {:ok, email_state} =
-             name_state
-             |> Changeset.for_update(
-               :submit_resend_name,
-               %{
-                 last_inbound_message_id: "wamid.resend-action-2",
-                 last_message_at: DateTime.utc_now() |> DateTime.truncate(:second),
-                 state_data: %{"resend_name" => "jamie smith"},
-                 correlation_id: "corr-resend-action-2",
-                 idempotency_key: "idem-resend-action-2",
                  transition_metadata: %{}
                },
                actor: actor
@@ -353,6 +342,11 @@ defmodule FastCheck.Sales.ConversationStateActionsTest do
       idempotency_key: "idem-matrix-#{action}-#{System.unique_integer([:positive])}",
       transition_metadata: %{}
     }
+
+    attrs =
+      if action == :select_resend_candidates,
+        do: Map.put(attrs, :encrypted_reply, "encrypted-test-reply"),
+        else: attrs
 
     attrs =
       if action in [:cancel_conversation, :handoff_conversation],

@@ -73,6 +73,7 @@ defmodule FastCheck.Sales.Order do
         :whatsapp_conversation_id
       ])
 
+      change(&set_canonical_email/2)
       change(set_attribute(:status, "draft"))
 
       validate(
@@ -548,7 +549,7 @@ defmodule FastCheck.Sales.Order do
   field_policies do
     private_fields(:include)
 
-    field_policy [:buyer_name, :buyer_phone, :buyer_email] do
+    field_policy [:buyer_name, :buyer_phone, :buyer_email, :buyer_email_canonical] do
       authorize_if({FastCheck.Sales.PolicyChecks.ActorTypeIn, actor_types: [:system, :admin]})
     end
 
@@ -573,6 +574,7 @@ defmodule FastCheck.Sales.Order do
     attribute(:buyer_name, :string)
     attribute(:buyer_phone, :string)
     attribute(:buyer_email, :string)
+    attribute(:buyer_email_canonical, :string, sensitive?: true, public?: false)
 
     attribute :source_channel, :string do
       allow_nil?(false)
@@ -662,6 +664,18 @@ defmodule FastCheck.Sales.Order do
       true ->
         :ok
     end
+  end
+
+  defp set_canonical_email(changeset, _context) do
+    email = Changeset.get_attribute(changeset, :buyer_email)
+
+    canonical =
+      case FastCheck.Tickets.Resend.Request.normalize_email(email) do
+        {:ok, value} -> value
+        _ -> nil
+      end
+
+    Changeset.force_change_attribute(changeset, :buyer_email_canonical, canonical)
   end
 
   defp record_create_transition(changeset, context) do

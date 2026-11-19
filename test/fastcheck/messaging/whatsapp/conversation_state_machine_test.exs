@@ -543,15 +543,9 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     assert result.conversation.state == "main_menu"
 
     assert {:ok, result} = handle(result.conversation, "3", "wamid.resend-accepted-3")
-    assert result.conversation.state == "collecting_resend_name"
-    assert result.response_body =~ "naam"
-
-    assert {:ok, result} =
-             handle(result.conversation, "  Jamie Smith  ", "wamid.resend-accepted-4")
-
     assert result.conversation.state == "collecting_resend_email"
-    assert result.conversation.state_data["resend_name"] == "jamie smith"
     assert result.response_body =~ "e-pos"
+    refute result.response_body =~ "naam"
 
     assert {:ok, result} =
              handle(result.conversation, "  RESEND@example.COM  ", "wamid.resend-accepted-5")
@@ -565,7 +559,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     refute result.response_body =~ "https://"
 
     data = result.conversation.state_data
-    assert data["resend_name"] == "jamie smith"
+    refute Map.has_key?(data, "resend_name")
     assert data["resend_email"] == "resend@example.com"
     assert data["resend_email_otp_result_status"] == "accepted"
     assert data["resend_correlation_id"] == "corr-wamid.resend-accepted-5"
@@ -584,6 +578,19 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     refute inspect(session) =~ "jamie smith"
     refute inspect(session) =~ "resend@example.com"
     refute inspect(session) =~ data["resend_challenge_public_id"]
+  end
+
+  test "legacy resend-name state moves safely to email without treating the name as proof", %{
+    conversation: conversation
+  } do
+    legacy = %{conversation | state: "collecting_resend_name", state_data: %{}}
+    assert {:ok, response} = handle(legacy, "Jamie Smith", "wamid.legacy-resend-name")
+    assert response.conversation.state == "collecting_resend_email"
+    assert response.response_body =~ "e-pos"
+    refute Map.has_key?(response.conversation.state_data, "resend_name")
+    refute Map.has_key?(response.conversation.state_data, "resend_challenge_public_id")
+    assert_no_email_sent()
+    refute_enqueued(worker: SendWhatsAppTicketLinkWorker)
   end
 
   test "active Orders dominate inbound messages in historical resend states", %{
@@ -764,7 +771,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     assert_no_email_sent()
   end
 
-  test "generic rejected resend request uses same visible OTP prompt without challenge id", %{
+  test "unknown email receives the same OTP prompt without candidate disclosure", %{
     conversation: conversation
   } do
     accepted =
@@ -772,17 +779,14 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
       |> progress("hi", "resend-rejected-a1")
       |> progress("1", "resend-rejected-a2")
       |> progress("3", "resend-rejected-a3")
-      |> progress("Jamie Smith", "resend-rejected-a4")
       |> progress("missing@example.com", "resend-rejected-a5")
 
     assert accepted.conversation.state == "collecting_resend_otp"
 
-    assert accepted.conversation.state_data["resend_email_otp_result_status"] ==
-             "generic_rejected"
-
-    refute Map.has_key?(accepted.conversation.state_data, "resend_challenge_public_id")
+    assert accepted.conversation.state_data["resend_email_otp_result_status"] == "accepted"
+    assert is_binary(accepted.conversation.state_data["resend_challenge_public_id"])
     assert accepted.response_body =~ "verifikasiekode"
-    assert_no_email_sent()
+    assert_email_sent()
     refute_enqueued(worker: SendWhatsAppTicketLinkWorker)
     assert delivery_attempt_count() == 0
   end
@@ -793,15 +797,6 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
       |> progress("hi", "resend-invalid-1")
       |> progress("1", "resend-invalid-2")
       |> progress("3", "resend-invalid-3")
-
-    assert {:ok, blank_name} = handle(result.conversation, " ", "wamid.resend-invalid-4")
-    assert blank_name.conversation.state == "collecting_resend_name"
-    refute Map.has_key?(blank_name.conversation.state_data, "resend_name")
-
-    assert {:ok, result} =
-             handle(blank_name.conversation, "Jamie Smith", "wamid.resend-invalid-5")
-
-    assert result.conversation.state == "collecting_resend_email"
 
     assert {:ok, bad_email} =
              handle(result.conversation, "not-an-email", "wamid.resend-invalid-6")
@@ -829,7 +824,6 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
       |> progress("hi", "resend-verify-1")
       |> progress("1", "resend-verify-2")
       |> progress("3", "resend-verify-3")
-      |> progress("Jamie Smith", "resend-verify-4")
       |> progress("resend@example.com", "resend-verify-5")
 
     otp = extract_single_otp_from_email!()
@@ -892,7 +886,6 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
       |> progress("hi", "resend-zero-1")
       |> progress("1", "resend-zero-2")
       |> progress("3", "resend-zero-3")
-      |> progress("Jamie Smith", "resend-zero-4")
       |> progress("zero@example.com", "resend-zero-5")
 
     public_id = result.conversation.state_data["resend_challenge_public_id"]
@@ -918,7 +911,6 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
       |> progress("hi", "resend-failures-1")
       |> progress("1", "resend-failures-2")
       |> progress("3", "resend-failures-3")
-      |> progress("Jamie Smith", "resend-failures-4")
       |> progress("failures@example.com", "resend-failures-5")
 
     assert {:ok, wrong} = handle(result.conversation, "000000", "wamid.resend-failures-6")
@@ -943,8 +935,15 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
 
   test "expired and locked resend OTP outcomes remain safe", %{conversation: conversation} do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
-    {:ok, expired_challenge, expired_otp} = Otp.issue(challenge_attrs!(), now, return_otp?: true)
-    {:ok, locked_challenge, _locked_otp} = Otp.issue(challenge_attrs!(), now, return_otp?: true)
+
+    attrs = %{
+      conversation_id: conversation.id,
+      source_hash: Hash.source(%{conversation_id: conversation.id}),
+      request_email_hash: Hash.email("resend@example.com")
+    }
+
+    {:ok, expired_challenge, expired_otp} = Otp.issue(attrs, now, return_otp?: true)
+    {:ok, locked_challenge, _locked_otp} = Otp.issue(attrs, now, return_otp?: true)
 
     Repo.update_all(
       from(c in "sales_ticket_resend_challenges",
@@ -956,7 +955,10 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     expired = %{
       conversation
       | state: "collecting_resend_otp",
-        state_data: %{"resend_challenge_public_id" => expired_challenge.public_id}
+        state_data: %{
+          "resend_challenge_public_id" => expired_challenge.public_id,
+          "resend_email" => "resend@example.com"
+        }
     }
 
     assert {:ok, expired_result} =
@@ -971,7 +973,10 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
                  %{
                    conversation
                    | state: "collecting_resend_otp",
-                     state_data: %{"resend_challenge_public_id" => locked_challenge.public_id}
+                     state_data: %{
+                       "resend_challenge_public_id" => locked_challenge.public_id,
+                       "resend_email" => "resend@example.com"
+                     }
                  },
                  "000000",
                  "wamid.resend-locked-#{attempt}"
@@ -981,7 +986,10 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     locked = %{
       conversation
       | state: "collecting_resend_otp",
-        state_data: %{"resend_challenge_public_id" => locked_challenge.public_id}
+        state_data: %{
+          "resend_challenge_public_id" => locked_challenge.public_id,
+          "resend_email" => "resend@example.com"
+        }
     }
 
     assert {:ok, locked_result} = handle(locked, "000000", "wamid.resend-locked-6")
@@ -1052,7 +1060,6 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
       |> progress("hi", "resend-otp-1")
       |> progress("1", "resend-otp-2")
       |> progress("3", "resend-otp-3")
-      |> progress("Jamie Smith", "resend-otp-4")
       |> progress("missing@example.com", "resend-otp-5")
 
     assert result.conversation.state == "collecting_resend_otp"
@@ -1699,10 +1706,8 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     assert {:ok, help} = handle(menu.conversation, "4", "wamid.recovery-help")
     assert help.response_body =~ "3. Stuur"
     assert {:ok, resend} = handle(help.conversation, "3", "wamid.recovery-resend")
-    assert resend.conversation.state == "collecting_resend_name"
-    assert {:ok, named} = handle(resend.conversation, "Test Buyer", "wamid.recovery-resend-name")
-    assert named.conversation.state == "collecting_resend_email"
-    assert {:ok, returned} = handle(named.conversation, "#", "wamid.recovery-resend-back")
+    assert resend.conversation.state == "collecting_resend_email"
+    assert {:ok, returned} = handle(resend.conversation, "#", "wamid.recovery-resend-back")
     assert returned.conversation.state == "main_menu"
     assert returned.conversation.state_data["sales_order_id"] == order.id
     refute returned.response_body =~ "Koop kaartjies"

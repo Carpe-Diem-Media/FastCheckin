@@ -195,6 +195,27 @@ defmodule FastCheck.Tickets.Resend.EmailFirstTest do
                {conversation_id, command, "owner@example.com"}
              )
 
+    assert {:ok, _} =
+             Otp.recover_verified(
+               challenge.public_id,
+               otp,
+               {conversation_id, command, "owner@example.com"}
+             )
+
+    assert {:error, :invalid_or_expired} =
+             Otp.recover_verified(
+               challenge.public_id,
+               otp <> "0",
+               {conversation_id, command, "owner@example.com"}
+             )
+
+    assert {:error, :invalid_or_expired} =
+             Otp.recover_verified(
+               challenge.public_id,
+               otp,
+               {conversation_id, %{command | wa_id: "wrong"}, "owner@example.com"}
+             )
+
     candidate = issued_ticket_candidate!(buyer_email: "owner@example.com")
 
     assert {:ok, :bound} =
@@ -204,6 +225,15 @@ defmodule FastCheck.Tickets.Resend.EmailFirstTest do
                now,
                {conversation_id, command, "owner@example.com"}
              )
+
+    assert {:ok, recovered} =
+             Otp.recover_verified(
+               challenge.public_id,
+               otp,
+               {conversation_id, command, "owner@example.com"}
+             )
+
+    assert recovered.ticket_issue_id == candidate.ticket_issue_id
 
     assert {:ok, :already_bound} =
              Otp.bind(

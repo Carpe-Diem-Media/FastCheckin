@@ -65,6 +65,35 @@ defmodule FastCheck.Messaging.WhatsApp.ResendDeliveryFlowTest do
              )
   end
 
+  test "expired or no longer scannable tickets cannot be enqueued" do
+    conversation = insert_conversation!()
+    expired = verified_challenge!(conversation.id)
+
+    Repo.update_all(from(c in "sales_ticket_resend_challenges", where: c.id == ^expired.id),
+      set: [expires_at: DateTime.add(DateTime.utc_now(), -1, :second)]
+    )
+
+    assert {:error, :not_deliverable} =
+             ResendDeliveryFlow.enqueue_verified_ticket_link(
+               command("expired"),
+               put_challenge(conversation, expired.public_id)
+             )
+
+    revoked = verified_challenge!(conversation.id)
+
+    Repo.update_all(from(t in "sales_ticket_issues", where: t.id == ^revoked.ticket_issue_id),
+      set: [scanner_status: "invalid"]
+    )
+
+    assert {:error, :not_deliverable} =
+             ResendDeliveryFlow.enqueue_verified_ticket_link(
+               command("invalid"),
+               put_challenge(conversation, revoked.public_id)
+             )
+
+    refute_enqueued(worker: SendWhatsAppTicketLinkWorker)
+  end
+
   test "missing or unknown challenge does not enqueue" do
     conversation = insert_conversation!()
     command = command("flow-missing")

@@ -190,6 +190,9 @@ defmodule FastCheck.Messaging.WhatsApp.ActiveCommercialOrderTest do
       {:submit_resend_email, "collecting_resend_email"},
       {:return_to_resend_name_collection, "collecting_resend_email"},
       {:return_to_resend_email_collection, "collecting_resend_otp"},
+      {:select_resend_candidates, "collecting_resend_otp"},
+      {:expire_resend_snapshot, "selecting_resend_ticket"},
+      {:bind_resend_ticket, "selecting_resend_ticket"},
       {:verify_resend_otp, "collecting_resend_otp"},
       {:queue_verified_resend_delivery, "awaiting_verified_resend_delivery"}
     ]
@@ -198,18 +201,25 @@ defmodule FastCheck.Messaging.WhatsApp.ActiveCommercialOrderTest do
       conversation = insert_conversation!(58 + index, state, %{})
       order = create_order!(conversation, offer, "direct-resend-#{action}-#{conversation.id}")
 
+      attrs = %{
+        state_data: %{},
+        last_inbound_message_id: "wamid.direct-#{action}",
+        last_message_at: DateTime.utc_now() |> DateTime.truncate(:second),
+        correlation_id: "corr-direct-#{action}",
+        idempotency_key: "idem-direct-#{action}",
+        transition_metadata: %{source_channel: "whatsapp"}
+      }
+
+      attrs =
+        if action == :select_resend_candidates,
+          do: Map.put(attrs, :encrypted_reply, "encrypted-test-reply"),
+          else: attrs
+
       assert {:error, _reason} =
                conversation
                |> Changeset.for_update(
                  action,
-                 %{
-                   state_data: %{},
-                   last_inbound_message_id: "wamid.direct-#{action}",
-                   last_message_at: DateTime.utc_now() |> DateTime.truncate(:second),
-                   correlation_id: "corr-direct-#{action}",
-                   idempotency_key: "idem-direct-#{action}",
-                   transition_metadata: %{source_channel: "whatsapp"}
-                 },
+                 attrs,
                  actor: %{actor_type: :system, actor_id: "active-order-test"}
                )
                |> Ash.update(authorize?: false)

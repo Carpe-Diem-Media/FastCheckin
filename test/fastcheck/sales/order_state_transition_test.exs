@@ -14,6 +14,35 @@ defmodule FastCheck.Sales.OrderStateTransitionTest do
     :ok
   end
 
+  test "canonical email is not an accepted order input" do
+    action = Ash.Resource.Info.action(Order, :create_draft)
+    refute :buyer_email_canonical in action.accept
+  end
+
+  test "draft order computes a private canonical email using the resend normalizer" do
+    email = "  İ@Example.com  "
+
+    order =
+      Order
+      |> Changeset.for_create(
+        :create_draft,
+        %{
+          public_reference: "FC-canonical-#{System.unique_integer([:positive])}",
+          event_id: Fixtures.event_id(),
+          source_channel: "test",
+          total_amount_cents: 1000,
+          currency: "ZAR",
+          buyer_email: email
+        },
+        actor: Fixtures.system_actor()
+      )
+      |> Ash.create!(authorize?: false)
+
+    assert order.buyer_email == String.trim(email)
+    assert order.buyer_email_canonical == "i\u0307@example.com"
+    refute inspect(order) =~ "i\u0307@example.com"
+  end
+
   test "state transitions are appended for order status changes" do
     actor = Fixtures.system_actor()
 

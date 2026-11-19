@@ -18,3 +18,15 @@ defmodule FastCheck.Messaging.WhatsApp.FlowResult do
           send_reply?: boolean()
         }
 end
+
+defimpl Inspect, for: FastCheck.Messaging.WhatsApp.FlowResult do
+  import Inspect.Algebra
+
+  def inspect(result, _opts) do
+    concat([
+      "#FlowResult<send_reply?: ",
+      to_string(result.send_reply?),
+      ", response_body: [FILTERED]>"
+    ])
+  end
+end

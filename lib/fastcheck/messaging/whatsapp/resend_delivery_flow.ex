@@ -12,6 +12,9 @@ defmodule FastCheck.Messaging.WhatsApp.ResendDeliveryFlow do
   alias FastCheck.Sales.TicketDeliveryIntent
   alias FastCheck.Sales.TicketIssue
   alias FastCheck.Sales.TicketResendChallenge
+  alias FastCheck.Tickets.Resend.Eligibility
+  alias FastCheck.Tickets.Resend.Hash
+  alias FastCheck.Tickets.Resend.Request
   alias FastCheck.Workers.SendWhatsAppTicketLinkWorker
 
   @system_actor %{actor_type: :system, actor_id: "whatsapp_resend_delivery_flow"}
@@ -62,6 +65,10 @@ defmodule FastCheck.Messaging.WhatsApp.ResendDeliveryFlow do
     Repo.transaction(fn ->
       Repo.query!("SELECT pg_advisory_xact_lock($1)", [challenge.id])
 
+      Repo.query!("SELECT id FROM sales_ticket_resend_challenges WHERE id = $1 FOR UPDATE", [
+        challenge.id
+      ])
+
       with {:ok, challenge} <- load_challenge_by_id(challenge.id),
            :ok <- validate_challenge(challenge, conversation_id),
            {:ok, intent} <- get_or_create_intent(challenge, conversation_id),
@@ -94,6 +101,11 @@ defmodule FastCheck.Messaging.WhatsApp.ResendDeliveryFlow do
          {:ok, %Conversation{} = conversation} <- load_conversation(conversation_id),
          {:ok, %Order{} = order} <- load_order(challenge.sales_order_id),
          {:ok, %TicketIssue{} = issue} <- load_ticket_issue(challenge.ticket_issue_id),
+         %{sales_order_id: order_id, buyer_email: email} <-
+           Eligibility.find_eligible_ticket(challenge.ticket_issue_id),
+         {:ok, normalized_email} <- Request.normalize_email(email),
+         true <-
+           order_id == order.id and Hash.email(normalized_email) == challenge.request_email_hash,
          true <-
            challenge.conversation_id == conversation.id and
              order.status == "ticket_issued" and
@@ -108,6 +120,10 @@ defmodule FastCheck.Messaging.WhatsApp.ResendDeliveryFlow do
   defp ensure_deliverable_challenge(%TicketResendChallenge{} = challenge, conversation_id) do
     cond do
       challenge.status != "verified" ->
+        {:error, :not_deliverable}
+
+      is_nil(challenge.expires_at) or
+          DateTime.compare(challenge.expires_at, DateTime.utc_now()) != :gt ->
         {:error, :not_deliverable}
 
       not is_nil(challenge.consumed_at) ->

@@ -103,6 +103,35 @@ defmodule FastCheck.Tickets.Resend.Eligibility do
 
   def find_candidate(_email, _name), do: {:error, :invalid_input}
 
+  @doc "Fails closed while any eligible order lacks its canonical email key."
+  def canonical_coverage_complete? do
+    not Repo.exists?(
+      from [o, _ti, _a, _e] in eligible_query(), where: is_nil(o.buyer_email_canonical)
+    )
+  end
+
+  @doc "Returns at most ten currently eligible tickets for a verified email."
+  def candidates_for_email(email, phone) when is_binary(email) do
+    Repo.all(
+      from([o, ti, a, e] in eligible_query(),
+        where: fragment("? COLLATE \"C\"", o.buyer_email_canonical) == ^email,
+        order_by: [
+          desc: fragment("CASE WHEN ? = ? THEN 1 ELSE 0 END", o.buyer_phone, ^phone),
+          desc: o.inserted_at,
+          desc: ti.id
+        ],
+        limit: 10,
+        select: %{
+          ticket_issue_id: ti.id,
+          event_name: e.name,
+          first_name: a.first_name,
+          last_name: a.last_name
+        }
+      ),
+      log: false
+    )
+  end
+
   # The selected issue is addressed by primary key. Row locks keep eligibility
   # stable until the challenge binding transaction commits.
   def find_eligible_ticket(ticket_issue_id) when is_integer(ticket_issue_id) do

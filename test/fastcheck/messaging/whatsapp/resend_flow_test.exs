@@ -14,19 +14,9 @@ defmodule FastCheck.Messaging.WhatsApp.ResendFlowTest do
 
     challenge_public_id = "challenge-public-test"
 
-    email_otp_fun = fn request, _opts ->
-      assert request.name == "jamie smith"
-      assert request.email == "jamie@example.com"
-
-      assert request.source == %{
-               conversation_id: conversation.id,
-               phone_e164: command.phone_e164,
-               wa_id: command.wa_id
-             }
-
-      assert request.correlation_id == command.correlation_id
-      assert request.idempotency_key == command.provider_message_id
-      assert request.now == command.received_at
+    email_otp_fun = fn email, scope, _opts ->
+      assert email == "jamie@example.com"
+      assert scope == {conversation.id, command}
 
       {:ok,
        Result.new(:accepted, :otp_challenge_created, challenge_public_id: challenge_public_id)}
@@ -43,7 +33,7 @@ defmodule FastCheck.Messaging.WhatsApp.ResendFlowTest do
 
   test "does not keep challenge id for rejected or rate-limited results" do
     for status <- [:generic_rejected, :rate_limited] do
-      email_otp_fun = fn _request, _opts -> {:ok, Result.new(status, :rate_limited)} end
+      email_otp_fun = fn _email, _scope, _opts -> {:ok, Result.new(status, :rate_limited)} end
 
       assert {:ok, updates} =
                ResendFlow.request_email_otp(
@@ -64,17 +54,21 @@ defmodule FastCheck.Messaging.WhatsApp.ResendFlowTest do
     command = %{command() | text_body: "  012345  "}
     challenge_public_id = "challenge-public-test"
 
-    verify_otp_fun = fn public_id, submitted_otp, opts ->
+    verify_otp_fun = fn public_id, submitted_otp, scope, opts ->
       assert public_id == challenge_public_id
       assert submitted_otp == "012345"
-      assert opts[:now] == command.received_at
+      assert scope == {123, command, "jamie@example.com"}
+      assert opts == []
       {:ok, :discarded_challenge}
     end
 
     assert {:ok, :verified, updates} =
              ResendFlow.verify_email_otp(
                command,
-               conversation(%{"resend_challenge_public_id" => challenge_public_id}),
+               conversation(%{
+                 "resend_challenge_public_id" => challenge_public_id,
+                 "resend_email" => "jamie@example.com"
+               }),
                verify_otp_fun: verify_otp_fun
              )
 
@@ -89,7 +83,7 @@ defmodule FastCheck.Messaging.WhatsApp.ResendFlowTest do
   end
 
   test "missing challenge or malformed OTP is generic invalid without verifier call" do
-    verify_otp_fun = fn _public_id, _submitted_otp, _opts ->
+    verify_otp_fun = fn _public_id, _submitted_otp, _scope, _opts ->
       flunk("verifier must not be called without a challenge id and digit OTP")
     end
 
@@ -110,7 +104,7 @@ defmodule FastCheck.Messaging.WhatsApp.ResendFlowTest do
 
   test "normalizes verifier outcomes without returning challenge structs" do
     for reason <- [:invalid_or_expired, :locked, :already_verified] do
-      verify_otp_fun = fn _public_id, _submitted_otp, _opts -> {:error, reason} end
+      verify_otp_fun = fn _public_id, _submitted_otp, _scope, _opts -> {:error, reason} end
 
       assert {:error, ^reason} =
                ResendFlow.verify_email_otp(

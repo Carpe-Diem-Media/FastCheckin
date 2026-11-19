@@ -47,7 +47,6 @@ defmodule FastCheck.Messaging.WhatsApp.ResendTicketE2ETest do
         |> progress("hi", "e2e-1")
         |> progress("1", "e2e-2")
         |> progress("3", "e2e-3")
-        |> progress("Jamie Smith", "e2e-4")
         |> progress("resend@example.com", "e2e-5")
         |> then(fn result ->
           otp = extract_single_otp_from_email!()
@@ -186,7 +185,6 @@ defmodule FastCheck.Messaging.WhatsApp.ResendTicketE2ETest do
     |> progress("hi", "different-conv-1")
     |> progress("1", "different-conv-2")
     |> progress("3", "different-conv-3")
-    |> progress("Jamie Smith", "different-conv-4")
     |> progress("resend@example.com", "different-conv-5")
     |> then(fn result ->
       otp = extract_single_otp_from_email!()
@@ -248,6 +246,337 @@ defmodule FastCheck.Messaging.WhatsApp.ResendTicketE2ETest do
              )
   end
 
+  test "verified selection is bounded and never discloses candidates before OTP", %{
+    conversation: conversation
+  } do
+    for count <- [2, 9, 10] do
+      email = "bounded-#{count}@example.com"
+
+      for n <- 1..count do
+        issued_ticket_candidate!(buyer_email: email, attendee_first_name: "Guest#{n}")
+      end
+
+      current =
+        Conversation
+        |> Query.for_read(:get_by_id, %{id: conversation.id})
+        |> Ash.read_one!(authorize?: false)
+
+      {:ok, menu} = handle(current, "#", "wamid.bound-menu-#{count}")
+      {:ok, email_prompt} = handle(menu.conversation, "3", "wamid.bound-start-#{count}")
+      {:ok, otp_prompt} = handle(email_prompt.conversation, email, "wamid.bound-email-#{count}")
+      refute otp_prompt.response_body =~ "Guest"
+      otp = extract_single_otp_from_email!()
+      {:ok, result} = handle(otp_prompt.conversation, otp, "wamid.bound-otp-#{count}")
+
+      if count <= 9 do
+        assert result.conversation.state == "selecting_resend_ticket"
+        assert result.response_body =~ "Guest1"
+        refute result.response_body =~ email
+        assert String.length(result.response_body) <= 4096
+        [code | _] = choice_codes(result.response_body)
+        {:ok, selected} = handle(result.conversation, code, "wamid.bound-select-#{count}")
+        assert selected.conversation.state == "verified_resend_delivery_queued"
+      else
+        refute result.response_body =~ "Guest"
+        assert result.response_body =~ "organiseerder"
+      end
+    end
+  end
+
+  test "a changed candidate snapshot cannot reinterpret a numeric selection", %{
+    conversation: conversation
+  } do
+    email = "stale@example.com"
+    first = issued_ticket_candidate!(buyer_email: email, attendee_first_name: "First")
+    issued_ticket_candidate!(buyer_email: email, attendee_first_name: "Second")
+
+    result =
+      conversation
+      |> progress("hi", "stale-1")
+      |> progress("1", "stale-2")
+      |> progress("3", "stale-3")
+      |> progress(email, "stale-4")
+
+    otp = extract_single_otp_from_email!()
+    {:ok, choices} = handle(result.conversation, otp, "wamid.stale-5")
+    assert choices.conversation.state == "selecting_resend_ticket"
+
+    Repo.update_all(from(t in "sales_ticket_issues", where: t.id == ^first.ticket_issue_id),
+      set: [status: "revoked", revoked_at: DateTime.utc_now() |> DateTime.truncate(:second)]
+    )
+
+    code =
+      Enum.find(choice_codes(choices.response_body), fn code ->
+        digest =
+          :crypto.hash(
+            :sha256,
+            "resend-choice:" <>
+              choices.conversation.state_data["resend_challenge_public_id"] <> ":" <> code
+          )
+          |> Base.encode16(case: :lower)
+
+        choices.conversation.state_data["resend_snapshot"]["choices"][digest] ==
+          first.ticket_issue_id
+      end)
+
+    assert code
+    {:ok, declined} = handle(choices.conversation, code, "wamid.stale-6")
+    assert declined.response_body =~ "organiseerder"
+    refute_enqueued(worker: SendWhatsAppTicketLinkWorker)
+  end
+
+  test "duplicate selection queues only one intent and exit expires a pending challenge", %{
+    conversation: conversation
+  } do
+    email = "duplicates@example.com"
+    issued_ticket_candidate!(buyer_email: email, attendee_first_name: "First")
+    issued_ticket_candidate!(buyer_email: email, attendee_first_name: "Second")
+
+    request =
+      conversation
+      |> progress("hi", "dup-1")
+      |> progress("1", "dup-2")
+      |> progress("3", "dup-3")
+      |> progress(email, "dup-4")
+
+    otp = extract_single_otp_from_email!()
+    {:ok, choices} = handle(request.conversation, otp, "wamid.dup-5")
+    [code | _] = choice_codes(choices.response_body)
+    refute inspect(choices) =~ code
+    {:ok, queued} = handle(choices.conversation, code, "wamid.dup-6")
+    assert queued.conversation.state == "verified_resend_delivery_queued"
+    assert {:ok, %{send_reply?: false}} = handle(queued.conversation, code, "wamid.dup-6")
+
+    assert Repo.one!(
+             from i in "sales_ticket_delivery_intents",
+               where: i.purpose == "verified_ticket_resend",
+               select: count(i.id)
+           ) == 1
+
+    {:ok, menu} = handle(queued.conversation, "#", "wamid.dup-7")
+    {:ok, prompt} = handle(menu.conversation, "3", "wamid.dup-8")
+    {:ok, pending} = handle(prompt.conversation, "other@example.com", "wamid.dup-9")
+    public_id = pending.conversation.state_data["resend_challenge_public_id"]
+    {:ok, exited} = handle(pending.conversation, "0", "wamid.dup-10")
+    assert exited.conversation.state == "main_menu"
+
+    assert Repo.one!(
+             from c in "sales_ticket_resend_challenges",
+               where: c.public_id == ^public_id,
+               select: c.status
+           ) == "expired"
+  end
+
+  test "competing choices cannot bind different tickets", %{conversation: conversation} do
+    email = "racing@example.com"
+    issued_ticket_candidate!(buyer_email: email, attendee_first_name: "First")
+    issued_ticket_candidate!(buyer_email: email, attendee_first_name: "Second")
+
+    pending =
+      conversation
+      |> progress("hi", "race-1")
+      |> progress("1", "race-2")
+      |> progress("3", "race-3")
+      |> progress(email, "race-4")
+
+    otp = extract_single_otp_from_email!()
+    {:ok, choices} = handle(pending.conversation, otp, "wamid.race-5")
+    [first, second] = choice_codes(choices.response_body)
+
+    results =
+      [first, second]
+      |> Enum.with_index()
+      |> Enum.map(fn {code, n} ->
+        Task.async(fn ->
+          ConversationStateMachine.handle_inbound(
+            command(choices.conversation, code, "wamid.race-choice-#{n}"),
+            choices.conversation
+          )
+        end)
+      end)
+      |> Enum.map(&Task.await(&1, 15_000))
+
+    assert Enum.any?(
+             results,
+             &match?({:ok, %{conversation: %{state: "verified_resend_delivery_queued"}}}, &1)
+           )
+
+    assert Repo.one!(
+             from i in "sales_ticket_delivery_intents",
+               where: i.purpose == "verified_ticket_resend",
+               select: count(i.id)
+           ) == 1
+  end
+
+  test "challenge expiry invalidates its choice snapshot before binding", %{
+    conversation: conversation
+  } do
+    email = "expired-choice@example.com"
+    issued_ticket_candidate!(buyer_email: email, attendee_first_name: "First")
+    issued_ticket_candidate!(buyer_email: email, attendee_first_name: "Second")
+
+    pending =
+      conversation
+      |> progress("hi", "choice-expiry-1")
+      |> progress("1", "choice-expiry-2")
+      |> progress("3", "choice-expiry-3")
+      |> progress(email, "choice-expiry-4")
+
+    otp = extract_single_otp_from_email!()
+    {:ok, choices} = handle(pending.conversation, otp, "wamid.choice-expiry-5")
+    [code | _] = choice_codes(choices.response_body)
+    public_id = choices.conversation.state_data["resend_challenge_public_id"]
+
+    Repo.update_all(from(c in "sales_ticket_resend_challenges", where: c.public_id == ^public_id),
+      set: [expires_at: DateTime.add(DateTime.utc_now(), -1, :second)]
+    )
+
+    {:ok, expired} = handle(choices.conversation, code, "wamid.choice-expiry-6")
+    assert expired.conversation.state_data["resend_snapshot"]["status"] == "expired"
+
+    assert Repo.one!(
+             from c in "sales_ticket_resend_challenges",
+               where: c.public_id == ^public_id,
+               select: c.status
+           ) == "expired"
+
+    refute_enqueued(worker: SendWhatsAppTicketLinkWorker)
+  end
+
+  test "selection racing exit never creates multiple resend intents", %{
+    conversation: conversation
+  } do
+    email = "race-exit@example.com"
+    issued_ticket_candidate!(buyer_email: email, attendee_first_name: "First")
+    issued_ticket_candidate!(buyer_email: email, attendee_first_name: "Second")
+
+    pending =
+      conversation
+      |> progress("hi", "exit-race-1")
+      |> progress("1", "exit-race-2")
+      |> progress("3", "exit-race-3")
+      |> progress(email, "exit-race-4")
+
+    otp = extract_single_otp_from_email!()
+    {:ok, choices} = handle(pending.conversation, otp, "wamid.exit-race-5")
+    [code | _] = choice_codes(choices.response_body)
+
+    results =
+      [code, "0"]
+      |> Enum.with_index()
+      |> Enum.map(fn {text, n} ->
+        Task.async(fn ->
+          ConversationStateMachine.handle_inbound(
+            command(choices.conversation, text, "wamid.exit-race-#{n}"),
+            choices.conversation
+          )
+        end)
+      end)
+      |> Enum.map(&Task.await(&1, 15_000))
+
+    assert length(results) == 2
+
+    assert Repo.one!(
+             from i in "sales_ticket_delivery_intents",
+               where: i.purpose == "verified_ticket_resend",
+               select: count(i.id)
+           ) <= 1
+
+    assert Repo.one!(
+             from c in "sales_ticket_resend_challenges",
+               where:
+                 c.public_id == ^choices.conversation.state_data["resend_challenge_public_id"],
+               select: c.status
+           ) in ["expired", "verified"]
+  end
+
+  test "choice mapping and encrypted reply are frozen together before delivery", %{
+    conversation: conversation
+  } do
+    email = "frozen@example.com"
+    issued_ticket_candidate!(buyer_email: email, attendee_first_name: "First")
+    issued_ticket_candidate!(buyer_email: email, attendee_first_name: "Second")
+
+    pending =
+      conversation
+      |> progress("hi", "frozen-1")
+      |> progress("1", "frozen-2")
+      |> progress("3", "frozen-3")
+      |> progress(email, "frozen-4")
+
+    otp = extract_single_otp_from_email!()
+
+    command = %MessageCommand{
+      provider: "meta",
+      provider_message_id: "wamid.frozen-5",
+      phone_e164: "+27821234567",
+      wa_id: "27821234567",
+      message_type: "text",
+      text_body: otp,
+      received_at: DateTime.utc_now() |> DateTime.truncate(:second),
+      raw_payload_hash: "synthetic",
+      correlation_id: "synthetic"
+    }
+
+    assert {:ok, result} = ConversationStateMachine.handle_inbound(command, pending.conversation)
+    [code | _] = choice_codes(result.response_body)
+    stored = result.conversation.state_data["pending_reply"]
+    assert stored["status"] == "reply_pending"
+    assert {:ok, body} = FastCheck.Crypto.decrypt(stored["ciphertext"])
+    assert body == result.response_body
+    refute inspect(result.conversation.state_data) =~ code
+    assert {:ok, repeated} = ConversationStateMachine.handle_inbound(command, result.conversation)
+    refute repeated.send_reply?
+    assert repeated.conversation.state_data["pending_reply"]["ciphertext"] == stored["ciphertext"]
+  end
+
+  test "zero eligible tickets returns safe help after verification", %{conversation: conversation} do
+    result =
+      conversation
+      |> progress("hi", "none-1")
+      |> progress("1", "none-2")
+      |> progress("3", "none-3")
+      |> progress("nobody@example.com", "none-4")
+
+    otp = extract_single_otp_from_email!()
+    {:ok, response} = handle(result.conversation, otp, "wamid.none-5")
+    assert response.response_body =~ "organiseerder"
+    refute_enqueued(worker: SendWhatsAppTicketLinkWorker)
+  end
+
+  test "an old snapshot code and bare number cannot select from a new list", %{
+    conversation: conversation
+  } do
+    email = "replace@example.com"
+    issued_ticket_candidate!(buyer_email: email, attendee_first_name: "First")
+    issued_ticket_candidate!(buyer_email: email, attendee_first_name: "Second")
+
+    initial =
+      conversation
+      |> progress("hi", "replace-1")
+      |> progress("1", "replace-2")
+      |> progress("3", "replace-3")
+      |> progress(email, "replace-4")
+
+    otp = extract_single_otp_from_email!()
+    {:ok, first} = handle(initial.conversation, otp, "wamid.replace-5")
+    [old_code | _] = choice_codes(first.response_body)
+    {:ok, menu} = handle(first.conversation, "0", "wamid.replace-6")
+    assert menu.conversation.state_data["resend_snapshot"]["status"] == "invalidated"
+    {:ok, prompt} = handle(menu.conversation, "3", "wamid.replace-7")
+    {:ok, pending} = handle(prompt.conversation, email, "wamid.replace-8")
+    otp2 = extract_single_otp_from_email!()
+    {:ok, second} = handle(pending.conversation, otp2, "wamid.replace-9")
+    refute old_code in choice_codes(second.response_body)
+    {:ok, invalid} = handle(second.conversation, old_code, "wamid.replace-10")
+    assert invalid.conversation.state == "selecting_resend_ticket"
+    {:ok, numeric} = handle(invalid.conversation, "1", "wamid.replace-11")
+    assert numeric.conversation.state == "selecting_resend_ticket"
+    refute_enqueued(worker: SendWhatsAppTicketLinkWorker)
+  end
+
+  defp choice_codes(body), do: Regex.scan(~r/FC-[A-Za-z0-9_-]{22}/, body) |> List.flatten()
+
   defp progress(%{conversation: conversation}, text, suffix),
     do: progress(conversation, text, suffix)
 
@@ -257,18 +586,7 @@ defmodule FastCheck.Messaging.WhatsApp.ResendTicketE2ETest do
   end
 
   defp handle(conversation, text, provider_message_id) do
-    command = %MessageCommand{
-      provider: "meta",
-      provider_message_id: provider_message_id,
-      phone_e164: "+27821234567",
-      wa_id: "27821234567",
-      message_type: "text",
-      text_body: text,
-      received_at: DateTime.utc_now() |> DateTime.truncate(:second),
-      raw_payload_hash: "hash-#{provider_message_id}",
-      correlation_id: "corr-#{provider_message_id}",
-      metadata: %{}
-    }
+    command = command(conversation, text, provider_message_id)
 
     case ConversationStateMachine.handle_inbound(command, conversation) do
       {:ok, %{send_reply?: true, conversation: updated_conversation} = result} ->
@@ -290,6 +608,27 @@ defmodule FastCheck.Messaging.WhatsApp.ResendTicketE2ETest do
       other ->
         other
     end
+  end
+
+  defp command(conversation, text, provider_message_id) do
+    %MessageCommand{
+      provider: "meta",
+      provider_message_id: provider_message_id,
+      phone_e164: "+27821234567",
+      wa_id: "27821234567",
+      message_type: "text",
+      text_body: text,
+      received_at:
+        DateTime.utc_now()
+        |> DateTime.add(
+          if(conversation.state == "selecting_resend_ticket", do: 2, else: 0),
+          :second
+        )
+        |> DateTime.truncate(:second),
+      raw_payload_hash: "hash-#{provider_message_id}",
+      correlation_id: "corr-#{provider_message_id}",
+      metadata: %{}
+    }
   end
 
   defp insert_conversation! do

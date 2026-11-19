@@ -36,6 +36,15 @@ defmodule FastCheck.TicketResendFixtures do
 
     ticket_issue_id = insert_ticket_issue!(order_id, line_id, attendee.id, unique, now, opts)
 
+    Repo.update_all(from(o in "sales_orders", where: o.id == ^order_id),
+      set: [
+        buyer_email_canonical:
+          Keyword.get(opts, :buyer_email, "resend@example.com")
+          |> String.trim()
+          |> String.downcase()
+      ]
+    )
+
     attendee
     |> Attendee.changeset(%{sales_ticket_issue_id: ticket_issue_id})
     |> Repo.update!()
