@@ -191,21 +191,7 @@ defmodule FastCheck.Tickets.Resend.Otp do
       {:ok, email} ->
         scope = {:conversation, id, command.wa_id, Hash.email(email)}
 
-        case Repo.transaction(fn ->
-               challenge = fetch_challenge(public_id)
-
-               if challenge && valid_scope?(challenge, scope) &&
-                    is_nil(challenge.request_name_hash) &&
-                    challenge.status == "verified" && is_nil(challenge.consumed_at) &&
-                    DateTime.compare(challenge.expires_at, now) == :gt do
-                 bind_verified(challenge, ticket_id, now)
-               else
-                 {:error, :invalid_or_expired}
-               end
-             end) do
-          {:ok, result} -> result
-          {:error, _} -> {:error, :invalid_or_expired}
-        end
+        bind_in_scope(public_id, ticket_id, now, scope)
 
       _ ->
         {:error, :invalid_or_expired}
@@ -213,6 +199,24 @@ defmodule FastCheck.Tickets.Resend.Otp do
   end
 
   def bind(_public_id, _ticket_id, _now, _scope), do: {:error, :invalid_or_expired}
+
+  defp bind_in_scope(public_id, ticket_id, now, scope) do
+    case Repo.transaction(fn ->
+           challenge = fetch_challenge(public_id)
+
+           if challenge && valid_scope?(challenge, scope) &&
+                is_nil(challenge.request_name_hash) &&
+                challenge.status == "verified" && is_nil(challenge.consumed_at) &&
+                DateTime.compare(challenge.expires_at, now) == :gt do
+             bind_verified(challenge, ticket_id, now)
+           else
+             {:error, :invalid_or_expired}
+           end
+         end) do
+      {:ok, result} -> result
+      {:error, _} -> {:error, :invalid_or_expired}
+    end
+  end
 
   defp bind_verified(
          %{ticket_issue_id: ticket_id, sales_order_id: order_id} = challenge,
