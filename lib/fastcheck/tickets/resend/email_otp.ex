@@ -5,15 +5,15 @@ defmodule FastCheck.Tickets.Resend.EmailOtp do
 
   alias Ash.Query
   alias FastCheck.Mailer
-  alias FastCheck.Repo
   alias FastCheck.Messaging.WhatsApp.MessageCommand
+  alias FastCheck.Repo
   alias FastCheck.Sales.Order
   alias FastCheck.Sales.TicketResendChallenge
   alias FastCheck.Tickets.Resend.Eligibility
-  alias FastCheck.Tickets.Resend.Hash
-  alias FastCheck.Tickets.Resend.RateLimit
   alias FastCheck.Tickets.Resend.EmailOtpRenderer
+  alias FastCheck.Tickets.Resend.Hash
   alias FastCheck.Tickets.Resend.Otp
+  alias FastCheck.Tickets.Resend.RateLimit
   alias FastCheck.Tickets.Resend.Request
   alias FastCheck.Tickets.Resend.Result
   alias Swoosh.Email

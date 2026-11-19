@@ -9,11 +9,11 @@ defmodule FastCheck.Tickets.Resend.Otp do
   import Ecto.Query
 
   alias Ash.Changeset
-  alias FastCheck.Repo
   alias FastCheck.Messaging.WhatsApp.MessageCommand
+  alias FastCheck.Repo
   alias FastCheck.Sales.TicketResendChallenge
-  alias FastCheck.Tickets.Resend.Hash
   alias FastCheck.Tickets.Resend.Eligibility
+  alias FastCheck.Tickets.Resend.Hash
   alias FastCheck.Tickets.Resend.RateLimit
   alias FastCheck.Tickets.Resend.Request
 
@@ -187,25 +187,28 @@ defmodule FastCheck.Tickets.Resend.Otp do
   """
   def bind(public_id, ticket_id, now, {id, %MessageCommand{} = command, email})
       when is_binary(public_id) and is_integer(ticket_id) do
-    with {:ok, email} <- Request.normalize_email(email) do
-      scope = {:conversation, id, command.wa_id, Hash.email(email)}
+    case Request.normalize_email(email) do
+      {:ok, email} ->
+        scope = {:conversation, id, command.wa_id, Hash.email(email)}
 
-      case Repo.transaction(fn ->
-             challenge = fetch_challenge(public_id)
+        case Repo.transaction(fn ->
+               challenge = fetch_challenge(public_id)
 
-             if challenge && valid_scope?(challenge, scope) && is_nil(challenge.request_name_hash) &&
-                  challenge.status == "verified" && is_nil(challenge.consumed_at) &&
-                  DateTime.compare(challenge.expires_at, now) == :gt do
-               bind_verified(challenge, ticket_id, now)
-             else
-               {:error, :invalid_or_expired}
-             end
-           end) do
-        {:ok, result} -> result
-        {:error, _} -> {:error, :invalid_or_expired}
-      end
-    else
-      _ -> {:error, :invalid_or_expired}
+               if challenge && valid_scope?(challenge, scope) &&
+                    is_nil(challenge.request_name_hash) &&
+                    challenge.status == "verified" && is_nil(challenge.consumed_at) &&
+                    DateTime.compare(challenge.expires_at, now) == :gt do
+                 bind_verified(challenge, ticket_id, now)
+               else
+                 {:error, :invalid_or_expired}
+               end
+             end) do
+          {:ok, result} -> result
+          {:error, _} -> {:error, :invalid_or_expired}
+        end
+
+      _ ->
+        {:error, :invalid_or_expired}
     end
   end
 

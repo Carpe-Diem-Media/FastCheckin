@@ -3,10 +3,10 @@ defmodule FastCheck.Tickets.Resend.EmailFirstTest do
 
   import Ecto.Query
   import FastCheck.TicketResendFixtures
-  alias FastCheck.Repo
   alias FastCheck.Messaging.WhatsApp.MessageCommand
-  alias FastCheck.Tickets.Resend.{Hash, Otp}
+  alias FastCheck.Repo
   alias FastCheck.Tickets.Resend.EmailOtp
+  alias FastCheck.Tickets.Resend.{Hash, Otp}
 
   test "email-first issuance sends to normalized email without an order" do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
