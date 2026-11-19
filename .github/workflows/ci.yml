@@ -3,7 +3,7 @@ name: CI
 # Trigger on pushes and pull requests to main and develop branches
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, well/whatsapp-sales-03-email-first-otp]
   pull_request:
     branches: [main, develop, well/whatsapp-main-menu-recovery, 'well/whatsapp-sales-*']
 
@@ -15,6 +15,139 @@ jobs:
   test:
     name: Test (Elixir ${{matrix.elixir}} OTP ${{matrix.otp}})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # Matrix strategy for easy version expansion
+    strategy:
+      matrix:
+        elixir: ['1.17.3']
+        otp: ['26.2']
+
+    # PostgreSQL service for tests
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: fastcheck_ci_bootstrap
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    # Environment variables for all steps
+    env:
+      MIX_ENV: test
+      # The test config uses the dedicated role and accepts this CI endpoint.
+      DB_HOST: localhost
+      DB_PORT: 5432
+      REDIS_URL: redis://localhost:6379
+      # Required for Phoenix - must be 64+ characters
+      SECRET_KEY_BASE: test_secret_key_base_for_github_actions_ci_pipeline_needs_64_chars_minimum
+
+    steps:
+      # Step 1: Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Keep the disposable service bootstrap role separate from the role used
+      # by Ecto. The latter is non-superuser and only has CREATEDB for test
+      # database creation. Provision it before setup-beam invokes Mix, since test
+      # configuration requires the generated role password while loading.
+      - name: Provision non-superuser test role
+        run: |
+          test_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$test_password"
+          echo "FASTCHECK_TEST_DB_PASSWORD=${test_password}" >> "$GITHUB_ENV"
+          psql \
+            --host "$DB_HOST" \
+            --port "$DB_PORT" \
+            --username fastcheck_ci_bootstrap \
+            --dbname postgres \
+            --set ON_ERROR_STOP=1 \
+          --set test_password="$test_password" <<'SQL'
+          CREATE ROLE fastcheck_test LOGIN NOSUPERUSER CREATEDB PASSWORD :'test_password';
+          CREATE DATABASE fastcheck_test OWNER fastcheck_test;
+          \connect fastcheck_test
+          CREATE EXTENSION IF NOT EXISTS btree_gist;
+          SQL
+
+      # Step 3: Setup Elixir and OTP after test configuration is available.
+      - name: Setup Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+
+      # Step 4: Restore dependency cache
+      - name: Restore dependencies cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-${{ matrix.elixir }}-${{ matrix.otp }}-
+
+      # Step 5: Install dependencies
+      - name: Install dependencies
+        run: mix deps.get
+
+      # Step 6: Compile code
+      - name: Compile code
+        run: mix compile
+
+      # Step 7: Check code formatting
+      - name: Check code formatting
+        run: mix format --check-formatted
+
+      # Step 8: Run Credo (code quality)
+      - name: Run Credo (static analysis)
+        run: mix credo --strict
+
+      # Step 9: Run Sobelow (security scan)
+      - name: Run Sobelow (security scan)
+        run: mix sobelow --exit --compact
+
+      # Step 10: Setup test database
+      - name: Create and migrate test database
+        run: |
+          mix ecto.create
+          mix ecto.migrate
+
+      # Step 11: Run test suite
+      - name: Run ordinary suite through full precommit
+        run: mix precommit
+
+      # Step 12: Upload test artifacts on failure
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts-elixir-${{ matrix.elixir }}-otp-${{ matrix.otp }}
+          path: |
+            _build/test/lib/fastcheck
+            cover/
+          retention-days: 7
+
+  independent-db:
+    name: Independent database tests (Elixir ${{matrix.elixir}} OTP ${{matrix.otp}})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     # Matrix strategy for easy version expansion
     strategy:
@@ -130,14 +263,17 @@ jobs:
 
       # Step 11: Run test suite
       - name: Run tests
-        run: mix test
+        run: |
+          set -o pipefail
+          mix test test/fastcheck/tickets/resend/email_first_concurrency_test.exs --include independent_db | tee "$RUNNER_TEMP/sales03-test-output.txt"
+          grep -Eq "^4 tests, 0 failures(, 0 skipped)?$" "$RUNNER_TEMP/sales03-test-output.txt"
 
       # Step 12: Upload test artifacts on failure
       - name: Upload test artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-artifacts-elixir-${{ matrix.elixir }}-otp-${{ matrix.otp }}
+          name: independent-test-artifacts-elixir-${{ matrix.elixir }}-otp-${{ matrix.otp }}
           path: |
             _build/test/lib/fastcheck
             cover/

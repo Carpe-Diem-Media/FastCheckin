@@ -17,6 +17,19 @@ defmodule FastCheck.Tickets.Resend.RateLimit do
 
   alias FastCheck.Repo
 
+  @doc "Acquires sorted transaction advisory locks for rate-limit identities."
+  def lock!(identities) do
+    identities
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&:crypto.hash(:sha256, &1))
+    |> Enum.map(fn <<key::signed-big-64, _::binary>> -> key end)
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> Enum.each(&Repo.query!("SELECT pg_advisory_xact_lock($1)", [&1]))
+
+    :ok
+  end
+
   @spec check_lookup(binary(), binary() | nil, DateTime.t()) :: :ok | {:error, atom()}
   def check_lookup(request_email_hash, source_hash, now) do
     case check_email(request_email_hash, now) do

@@ -44,10 +44,20 @@ defmodule FastCheck.Tickets.Resend.Eligibility do
           source_hash: source_hash
         }
 
-        case process_request(request_ctx, opts) do
-          {:ok, result, otp_payload} -> {:ok, result, otp_payload}
-          {:error, reason} -> handle_request_failure(reason, request_ctx)
-        end
+        {:ok, response} =
+          Repo.transaction(fn ->
+            RateLimit.lock!([
+              "email:" <> request_email_hash,
+              if(source_hash, do: "source:" <> source_hash)
+            ])
+
+            case process_request(request_ctx, opts) do
+              {:ok, result, otp_payload} -> {:ok, result, otp_payload}
+              {:error, reason} -> handle_request_failure(reason, request_ctx)
+            end
+          end)
+
+        response
 
       {:error, :invalid_input} ->
         {:ok, Result.new(:generic_rejected, :invalid_input), nil}
@@ -62,26 +72,8 @@ defmodule FastCheck.Tickets.Resend.Eligibility do
       when is_binary(normalized_email) and is_binary(normalized_name) do
     candidates =
       Repo.all(
-        from o in "sales_orders",
-          join: ti in "sales_ticket_issues",
-          on: ti.sales_order_id == o.id,
-          join: a in "attendees",
-          on: a.id == ti.attendee_id,
-          join: e in "events",
-          on: e.id == o.event_id,
+        from [o, ti, a, e] in eligible_query(),
           where: fragment("lower(?)", o.buyer_email) == ^normalized_email,
-          where: o.status == "ticket_issued",
-          where: ti.status == "issued",
-          where: ti.scanner_status == "valid",
-          where: is_nil(ti.revoked_at),
-          where: e.status != "archived",
-          where: is_nil(a.revoked_at),
-          where: is_nil(a.scan_eligibility) or a.scan_eligibility == "active",
-          where:
-            fragment(
-              "regexp_replace(lower(coalesce(?, '')), '^wc-', '') IN ('completed', 'complete')",
-              a.payment_status
-            ),
           where:
             fragment(
               "btrim(regexp_replace(regexp_replace(lower(coalesce(?, '')), '[[:punct:]]+', ' ', 'g'), '\\s+', ' ', 'g'))",
@@ -111,6 +103,39 @@ defmodule FastCheck.Tickets.Resend.Eligibility do
 
   def find_candidate(_email, _name), do: {:error, :invalid_input}
 
+  # The selected issue is addressed by primary key. Row locks keep eligibility
+  # stable until the challenge binding transaction commits.
+  def find_eligible_ticket(ticket_issue_id) when is_integer(ticket_issue_id) do
+    Repo.one(
+      from [o, ti, a, e] in eligible_query(),
+        where: ti.id == ^ticket_issue_id,
+        lock: "FOR SHARE",
+        select: %{sales_order_id: o.id, ticket_issue_id: ti.id, buyer_email: o.buyer_email}
+    )
+  end
+
+  defp eligible_query do
+    from o in "sales_orders",
+      join: ti in "sales_ticket_issues",
+      on: ti.sales_order_id == o.id,
+      join: a in "attendees",
+      on: a.id == ti.attendee_id,
+      join: e in "events",
+      on: e.id == o.event_id,
+      where: o.status == "ticket_issued",
+      where: ti.status == "issued",
+      where: ti.scanner_status == "valid",
+      where: is_nil(ti.revoked_at),
+      where: e.status != "archived",
+      where: is_nil(a.revoked_at),
+      where: is_nil(a.scan_eligibility) or a.scan_eligibility == "active",
+      where:
+        fragment(
+          "regexp_replace(lower(coalesce(?, '')), '^wc-', '') IN ('completed', 'complete')",
+          a.payment_status
+        )
+  end
+
   defp maybe_otp(nil), do: nil
   defp maybe_otp(otp), do: %{otp: otp}
 
@@ -126,6 +151,8 @@ defmodule FastCheck.Tickets.Resend.Eligibility do
         case find_candidate(normalized.email, normalized.name) do
           {:ok, candidate} ->
             candidate_hash = Hash.candidate(candidate.sales_order_id, candidate.ticket_issue_id)
+
+            RateLimit.lock!(["candidate:" <> candidate_hash])
 
             case RateLimit.check_candidate(candidate_hash, normalized.now) do
               :ok ->

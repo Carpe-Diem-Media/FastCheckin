@@ -5,19 +5,105 @@ defmodule FastCheck.Tickets.Resend.EmailOtp do
 
   alias Ash.Query
   alias FastCheck.Mailer
+  alias FastCheck.Repo
+  alias FastCheck.Messaging.WhatsApp.MessageCommand
   alias FastCheck.Sales.Order
   alias FastCheck.Sales.TicketResendChallenge
   alias FastCheck.Tickets.Resend.Eligibility
+  alias FastCheck.Tickets.Resend.Hash
+  alias FastCheck.Tickets.Resend.RateLimit
   alias FastCheck.Tickets.Resend.EmailOtpRenderer
   alias FastCheck.Tickets.Resend.Otp
   alias FastCheck.Tickets.Resend.Request
   alias FastCheck.Tickets.Resend.Result
   alias Swoosh.Email
+  import Ecto.Query
 
   @default_from_name "FastCheck"
   @default_from_email "no-reply@fastcheck.local"
 
   @type verify_error :: :invalid_or_expired | :locked | :already_verified
+
+  @doc """
+  Issues an unbound email challenge for a trusted webhook conversation.
+
+  The caller must obtain the command through the signed and account-scoped
+  ingress. Email and source rate checks and creation share advisory locks;
+  indexed challenge counts remain authoritative. Delivery is synchronous and
+  occurs after commit, so a delivery failure does not roll back the challenge.
+  """
+  def request_email_first(email, scope, opts \\ [])
+
+  def request_email_first(email, {id, %MessageCommand{} = command}, opts) do
+    now = Keyword.get(opts, :now, DateTime.utc_now() |> DateTime.truncate(:second))
+
+    with {:ok, normalized} <- Request.normalize_email(email),
+         true <- is_integer(id) and id > 0 and is_binary(command.wa_id),
+         {:ok, {challenge, otp}} <- issue_email_first(normalized, id, command.wa_id, now) do
+      if challenge.request_email_hash == Hash.email(normalized) do
+        try do
+          with {:ok, message} <- build_email(normalized, otp), do: deliver_email(message, opts)
+        rescue
+          _ -> :error
+        end
+      end
+
+      {:ok,
+       Result.new(:accepted, :otp_challenge_created, challenge_public_id: challenge.public_id)}
+    else
+      _ -> {:ok, Result.new(:generic_rejected, :invalid_input)}
+    end
+  end
+
+  def request_email_first(_email, _scope, _opts),
+    do: {:ok, Result.new(:generic_rejected, :invalid_input)}
+
+  @doc "Verifies an email-first challenge using trusted inbound context and server time."
+  def verify_email_first(public_id, submitted_otp, scope, opts \\ []) do
+    Otp.verify(
+      public_id,
+      submitted_otp,
+      Keyword.get(opts, :now, DateTime.utc_now() |> DateTime.truncate(:second)),
+      scope
+    )
+  end
+
+  @doc "Binds one eligible ticket after email verification, without queueing delivery."
+  def bind_email_first(public_id, ticket_id, scope, opts \\ []) do
+    Otp.bind(
+      public_id,
+      ticket_id,
+      Keyword.get(opts, :now, DateTime.utc_now() |> DateTime.truncate(:second)),
+      scope
+    )
+  end
+
+  defp issue_email_first(email, id, wa_id, now) do
+    email_hash = Hash.email(email)
+    source_hash = Hash.source(%{conversation_id: id})
+
+    Repo.transaction(fn ->
+      # Stable ordering avoids deadlocks when concurrent requests share an identity.
+      RateLimit.lock!(["email:" <> email_hash, "source:" <> source_hash])
+
+      if Repo.one(
+           from c in "sales_conversations",
+             where: c.id == ^id and c.wa_id == ^wa_id,
+             lock: "FOR SHARE",
+             select: c.id
+         ) == id and
+           RateLimit.check_lookup(email_hash, source_hash, now) == :ok do
+        case Otp.issue(
+               %{conversation_id: id, source_hash: source_hash, request_email_hash: email_hash},
+               now, return_otp?: true) do
+          {:ok, challenge, otp} -> {challenge, otp}
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      else
+        Repo.rollback(:unavailable)
+      end
+    end)
+  end
 
   @spec request_email_otp(Request.t() | map(), keyword()) :: {:ok, Result.t()}
   def request_email_otp(request, opts \\ []) do
