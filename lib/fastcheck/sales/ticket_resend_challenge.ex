@@ -14,6 +14,10 @@ defmodule FastCheck.Sales.TicketResendChallenge do
   alias Ash.Changeset
   alias FastCheck.Observability.Redactor
 
+  resource do
+    generate_inspect?(false)
+  end
+
   postgres do
     table("sales_ticket_resend_challenges")
     repo(FastCheck.Repo)
