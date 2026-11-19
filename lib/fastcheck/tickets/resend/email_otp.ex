@@ -95,7 +95,9 @@ defmodule FastCheck.Tickets.Resend.EmailOtp do
            RateLimit.check_lookup(email_hash, source_hash, now) == :ok do
         case Otp.issue(
                %{conversation_id: id, source_hash: source_hash, request_email_hash: email_hash},
-               now, return_otp?: true) do
+               now,
+               return_otp?: true
+             ) do
           {:ok, challenge, otp} -> {challenge, otp}
           {:error, reason} -> Repo.rollback(reason)
         end
