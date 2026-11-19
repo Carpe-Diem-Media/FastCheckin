@@ -121,7 +121,33 @@ defmodule FastCheck.Tickets.Resend.Eligibility do
 
   @doc false
   def candidates_query(email, phone) when is_binary(email) do
-    from [o, ti, a, e] in eligible_query(),
+    # Within an order, phone and order time are constant. Taking its ten
+    # highest eligible issue IDs therefore cannot change the global top ten.
+    # The lateral limit keeps the order-to-ticket lookup parameterized.
+    tickets =
+      from ti in "sales_ticket_issues",
+        join: a in "attendees",
+        on: a.id == ti.attendee_id,
+        where: ti.sales_order_id == parent_as(:order).id,
+        where: ti.status == "issued" and ti.scanner_status == "valid",
+        where: is_nil(ti.revoked_at) and is_nil(a.revoked_at),
+        where: is_nil(a.scan_eligibility) or a.scan_eligibility == "active",
+        where:
+          fragment(
+            "regexp_replace(lower(coalesce(?, '')), '^wc-', '') IN ('completed', 'complete')",
+            a.payment_status
+          ),
+        order_by: [desc: ti.id],
+        limit: 10,
+        select: %{id: ti.id, first_name: a.first_name, last_name: a.last_name}
+
+    from o in "sales_orders",
+      as: :order,
+      join: e in "events",
+      on: e.id == o.event_id,
+      inner_lateral_join: ti in subquery(tickets),
+      on: true,
+      where: o.status == "ticket_issued" and e.status != "archived",
       where: fragment("? COLLATE \"C\"", o.buyer_email_canonical) == ^email,
       order_by: [
         desc: fragment("CASE WHEN ? = ? THEN 1 ELSE 0 END", o.buyer_phone, ^phone),
@@ -132,8 +158,8 @@ defmodule FastCheck.Tickets.Resend.Eligibility do
       select: %{
         ticket_issue_id: ti.id,
         event_name: e.name,
-        first_name: a.first_name,
-        last_name: a.last_name
+        first_name: ti.first_name,
+        last_name: ti.last_name
       }
   end
 
