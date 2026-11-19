@@ -530,6 +530,88 @@ defmodule FastCheck.Messaging.WhatsApp.ResendTicketE2ETest do
     assert repeated.conversation.state_data["pending_reply"]["ciphertext"] == stored["ciphertext"]
   end
 
+  test "inbound worker reuses a frozen menu after provider acceptance and process loss", %{
+    conversation: conversation
+  } do
+    email = "frozen-recovery@example.com"
+    issued_ticket_candidate!(buyer_email: email, attendee_first_name: "First")
+    issued_ticket_candidate!(buyer_email: email, attendee_first_name: "Second")
+
+    pending =
+      conversation
+      |> progress("hi", "frozen-recovery-1")
+      |> progress("1", "frozen-recovery-2")
+      |> progress("3", "frozen-recovery-3")
+      |> progress(email, "frozen-recovery-4")
+
+    otp = extract_single_otp_from_email!()
+    cmd = command(pending.conversation, otp, "wamid.frozen-recovery-5")
+    assert {:ok, result} = ConversationStateMachine.handle_inbound(cmd, pending.conversation)
+    frozen = result.conversation.state_data["pending_reply"]["ciphertext"]
+    mapping = result.conversation.state_data["resend_snapshot"]
+    assert {:ok, expected} = FastCheck.Crypto.decrypt(frozen)
+    codes = choice_codes(expected)
+    assert length(codes) == 2
+
+    for code <- codes do
+      digest =
+        :crypto.hash(:sha256, "resend-choice:" <> mapping["challenge"] <> ":" <> code)
+        |> Base.encode16(case: :lower)
+
+      assert is_integer(mapping["choices"][digest])
+    end
+
+    args = %{
+      "conversation_id" => conversation.id,
+      "provider_message_id" => cmd.provider_message_id,
+      "correlation_id" => cmd.correlation_id,
+      "message_type" => "text"
+    }
+
+    parent = self()
+    # The provider can accept before the worker dies; recovery may send the same menu twice.
+    Application.put_env(:fastcheck, :whatsapp_request_fun, fn request ->
+      send(parent, {:fake_provider_accepted, request.options.json["text"]["body"]})
+      Process.exit(self(), :kill)
+    end)
+
+    {pid, monitor} =
+      spawn_monitor(fn -> perform_job(FastCheck.Workers.WhatsAppInboundWorker, args) end)
+
+    assert_receive {:fake_provider_accepted, ^expected}, 5_000
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :killed}, 5_000
+
+    after_loss =
+      Conversation
+      |> Query.for_read(:get_by_id, %{id: conversation.id})
+      |> Ash.read_one!(authorize?: false)
+
+    assert after_loss.state_data["pending_reply"]["ciphertext"] == frozen
+    assert after_loss.state_data["resend_snapshot"] == mapping
+
+    Application.put_env(:fastcheck, :whatsapp_request_fun, fn request ->
+      send(parent, {:retried_menu, request.options.json["text"]["body"]})
+
+      {:ok,
+       %Req.Response{
+         status: 200,
+         body: Jason.encode!(%{"messages" => [%{"id" => "wamid.frozen-recovery-out"}]})
+       }}
+    end)
+
+    assert :ok = perform_job(FastCheck.Workers.WhatsAppInboundWorker, args)
+    assert_receive {:retried_menu, ^expected}
+
+    after_retry =
+      Conversation
+      |> Query.for_read(:get_by_id, %{id: conversation.id})
+      |> Ash.read_one!(authorize?: false)
+
+    assert after_retry.state_data["resend_snapshot"] == mapping
+    assert after_retry.state_data["pending_reply"]["status"] == "reply_sent"
+    assert is_nil(after_retry.state_data["pending_reply"]["ciphertext"])
+  end
+
   test "zero eligible tickets returns safe help after verification", %{conversation: conversation} do
     result =
       conversation

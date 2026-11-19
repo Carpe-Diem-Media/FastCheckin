@@ -265,8 +265,22 @@ jobs:
       - name: Run tests
         run: |
           set -o pipefail
-          mix test test/fastcheck/tickets/resend/email_first_concurrency_test.exs --include independent_db | tee "$RUNNER_TEMP/sales03-test-output.txt"
-          grep -Eq "^4 tests, 0 failures(, 0 skipped)?$" "$RUNNER_TEMP/sales03-test-output.txt"
+          mix test test/fastcheck/tickets/resend/email_first_concurrency_test.exs test/fastcheck/tickets/resend/sales04_physical_concurrency_test.exs --include independent_db --trace | tee "$RUNNER_TEMP/sales-resend-independent-output.txt"
+          grep -Eq "^11 tests, 0 failures(, 0 skipped)?$" "$RUNNER_TEMP/sales-resend-independent-output.txt"
+          for name in \
+            "independent connections serialize issuance by email and source" \
+            "independent connections serialize OTP verification and competing ticket binds" \
+            "independent wrong attempts are all recorded" \
+            "binding and invalidation serialize on the challenge row" \
+            "physical competing snapshot choices retain exactly the winning ticket" \
+            "physical duplicate snapshot choice keeps one binding and one intent" \
+            "physical selection after exit cannot bind or enqueue" \
+            "physical exit after selection cannot rebind or create another intent" \
+            "physical selection waiting on a lock observes authoritative expiry" \
+            "new selection path rejects malformed foreign source and foreign challenge codes" \
+            "physical backfill CAS observes a concurrently committed email change"; do
+            grep -Fq "$name" "$RUNNER_TEMP/sales-resend-independent-output.txt"
+          done
 
       # Step 12: Upload test artifacts on failure
       - name: Upload test artifacts
