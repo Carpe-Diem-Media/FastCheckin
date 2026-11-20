@@ -371,14 +371,17 @@ defmodule FastCheck.Cache.CacheManager do
   end
 
   @doc """
-  Invalidates all entries matching the provided pattern. The pattern supports
-  wildcards accepted by `Cachex.keys/2`. An invalidation message is also
-  broadcast over PubSub so all nodes drop the same entries.
+  Invalidates binary keys matching the pattern. `*` matches any sequence of
+  characters; all other characters are literal. Empty patterns and patterns
+  containing only wildcards are rejected. A successful local invalidation
+  broadcasts the pattern over PubSub for other nodes.
   """
   @spec invalidate_pattern(String.t()) :: cache_result(non_neg_integer())
   def invalidate_pattern(pattern) when is_binary(pattern) do
     do_invalidate(pattern, :local)
   end
+
+  def invalidate_pattern(_pattern), do: {:error, :invalid_pattern}
 
   @doc """
   Clears the entire cache. Intended for administrative or testing purposes.
@@ -692,23 +695,62 @@ defmodule FastCheck.Cache.CacheManager do
   end
 
   defp do_invalidate(pattern, origin) do
-    if cache_ready?() do
-      case Cachex.keys(cache_name(), match: pattern) do
-        {:ok, keys} ->
-          count = delete_matching_keys(keys)
+    with {:ok, matcher} <- invalidation_matcher(pattern),
+         true <- cache_ready?(),
+         {:ok, count} <- invalidate_matching(matcher) do
+      if origin == :local do
+        PubSub.broadcast(@pubsub, config()[:pubsub_topic], {@invalidation_event, pattern})
+      end
 
-          if origin == :local do
-            PubSub.broadcast(@pubsub, config()[:pubsub_topic], {@invalidation_event, pattern})
-          end
+      {:ok, count}
+    else
+      false ->
+        {:error, :cache_unavailable}
 
-          {:ok, count}
+      {:error, :invalid_pattern} = error ->
+        error
 
-        {:error, reason} ->
-          log_cache_error(:invalidate, pattern, reason)
-          {:error, reason}
+      {:error, reason} ->
+        Logger.warning("Cache invalidation failed")
+        {:error, reason}
+    end
+  end
+
+  defp invalidation_matcher(pattern) when is_binary(pattern) do
+    if String.valid?(pattern) and String.trim(pattern, "*") != "" do
+      if String.contains?(pattern, "*") do
+        expression =
+          pattern
+          |> String.split("*")
+          |> Enum.map_join(".*", &Regex.escape/1)
+
+        case Regex.compile("\\A" <> expression <> "\\z", "s") do
+          {:ok, regex} -> {:ok, {:pattern, regex}}
+          {:error, _} -> {:error, :invalid_pattern}
+        end
+      else
+        {:ok, {:exact, pattern}}
       end
     else
-      {:error, :cache_unavailable}
+      {:error, :invalid_pattern}
+    end
+  end
+
+  defp invalidation_matcher(_pattern), do: {:error, :invalid_pattern}
+
+  defp invalidate_matching({:exact, key}) do
+    with {:ok, exists?} <- Cachex.exists?(cache_name(), key) do
+      if exists?, do: delete_matching_keys([key]), else: {:ok, 0}
+    end
+  end
+
+  defp invalidate_matching({:pattern, regex}) do
+    query = Cachex.Query.create(true, :key)
+
+    with {:ok, keys} <- Cachex.stream(cache_name(), query) do
+      keys
+      |> Stream.filter(&(is_binary(&1) and Regex.match?(regex, &1)))
+      |> delete_matching_keys()
     end
   end
 
@@ -739,10 +781,10 @@ defmodule FastCheck.Cache.CacheManager do
   end
 
   defp delete_matching_keys(keys) do
-    Enum.reduce(keys, 0, fn key, acc ->
+    Enum.reduce_while(keys, {:ok, 0}, fn key, {:ok, acc} ->
       case Cachex.del(cache_name(), key) do
-        {:ok, true} -> acc + 1
-        _ -> acc
+        {:ok, true} -> {:cont, {:ok, acc + 1}}
+        {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
