@@ -78,6 +78,22 @@ defmodule FastCheck.Tickets.Resend.EmailOtp do
     )
   end
 
+  @doc "Recovers a verified challenge after proving the same email and OTP again."
+  def recover_email_first(public_id, otp, scope), do: Otp.recover_verified(public_id, otp, scope)
+
+  @doc "Expires an unused challenge for the trusted conversation."
+  def expire_email_first(public_id, scope), do: Otp.expire(public_id, scope)
+
+  @doc "Reports whether eligible orders have canonical email coverage."
+  def canonical_coverage_complete?, do: Eligibility.canonical_coverage_complete?()
+
+  @doc """
+  Lists bounded eligible choices for a normalized email.
+
+  The caller must first verify ownership in the trusted conversation context.
+  """
+  def candidates_for_email(email, phone), do: Eligibility.candidates_for_email(email, phone)
+
   defp issue_email_first(email, id, wa_id, now) do
     email_hash = Hash.email(email)
     source_hash = Hash.source(%{conversation_id: id})

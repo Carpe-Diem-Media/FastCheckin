@@ -41,7 +41,7 @@ defmodule FastCheck.Sales.Conversation do
     start_default_main_menu: %{allowed_from: ["new"], to_state: "main_menu"},
     select_language: %{allowed_from: ["selecting_language"], to_state: "main_menu"},
     choose_buy_tickets: %{allowed_from: ["main_menu"], to_state: "selecting_event"},
-    choose_resend_ticket: %{allowed_from: ["main_menu"], to_state: "collecting_resend_name"},
+    choose_resend_ticket: %{allowed_from: ["main_menu"], to_state: "collecting_resend_email"},
     select_event: %{allowed_from: ["selecting_event"], to_state: "selecting_ticket_type"},
     select_ticket_type: %{
       allowed_from: ["selecting_ticket_type"],
@@ -100,6 +100,18 @@ defmodule FastCheck.Sales.Conversation do
       allowed_from: ["collecting_resend_otp"],
       to_state: "collecting_resend_email"
     },
+    select_resend_candidates: %{
+      allowed_from: ["collecting_resend_otp"],
+      to_state: "selecting_resend_ticket"
+    },
+    expire_resend_snapshot: %{
+      allowed_from: ["selecting_resend_ticket"],
+      to_state: "selecting_resend_ticket"
+    },
+    bind_resend_ticket: %{
+      allowed_from: ["selecting_resend_ticket"],
+      to_state: "awaiting_verified_resend_delivery"
+    },
     verify_resend_otp: %{
       allowed_from: ["collecting_resend_otp"],
       to_state: "awaiting_verified_resend_delivery"
@@ -140,6 +152,7 @@ defmodule FastCheck.Sales.Conversation do
         "collecting_resend_name",
         "collecting_resend_email",
         "collecting_resend_otp",
+        "selecting_resend_ticket",
         "awaiting_verified_resend_delivery",
         "verified_resend_delivery_queued"
       ],
@@ -159,6 +172,7 @@ defmodule FastCheck.Sales.Conversation do
         "collecting_resend_name",
         "collecting_resend_email",
         "collecting_resend_otp",
+        "selecting_resend_ticket",
         "awaiting_verified_resend_delivery",
         "verified_resend_delivery_queued"
       ],
@@ -182,6 +196,7 @@ defmodule FastCheck.Sales.Conversation do
         "collecting_resend_name",
         "collecting_resend_email",
         "collecting_resend_otp",
+        "selecting_resend_ticket",
         "awaiting_verified_resend_delivery",
         "verified_resend_delivery_queued"
       ],
@@ -211,6 +226,9 @@ defmodule FastCheck.Sales.Conversation do
     :submit_resend_email,
     :return_to_resend_name_collection,
     :return_to_resend_email_collection,
+    :select_resend_candidates,
+    :expire_resend_snapshot,
+    :bind_resend_ticket,
     :verify_resend_otp,
     :queue_verified_resend_delivery
   ]
@@ -222,6 +240,9 @@ defmodule FastCheck.Sales.Conversation do
     :submit_resend_email,
     :return_to_resend_name_collection,
     :return_to_resend_email_collection,
+    :select_resend_candidates,
+    :expire_resend_snapshot,
+    :bind_resend_ticket,
     :verify_resend_otp,
     :queue_verified_resend_delivery
   ]
@@ -549,6 +570,37 @@ defmodule FastCheck.Sales.Conversation do
       argument(:transition_metadata, :map)
 
       change(&transition_state(&1, &2, :return_to_resend_email_collection))
+    end
+
+    update :select_resend_candidates do
+      require_atomic?(false)
+      accept(@vs_18_checkpoint_fields)
+      argument(:correlation_id, :string)
+      argument(:idempotency_key, :string)
+      argument(:transition_metadata, :map)
+      argument(:encrypted_reply, :string, allow_nil?: false, sensitive?: true)
+
+      change(&transition_state(&1, &2, :select_resend_candidates))
+    end
+
+    update :expire_resend_snapshot do
+      require_atomic?(false)
+      accept(@vs_18_checkpoint_fields)
+      argument(:correlation_id, :string)
+      argument(:idempotency_key, :string)
+      argument(:transition_metadata, :map)
+
+      change(&transition_state(&1, &2, :expire_resend_snapshot))
+    end
+
+    update :bind_resend_ticket do
+      require_atomic?(false)
+      accept(@vs_18_checkpoint_fields)
+      argument(:correlation_id, :string)
+      argument(:idempotency_key, :string)
+      argument(:transition_metadata, :map)
+
+      change(&transition_state(&1, &2, :bind_resend_ticket))
     end
 
     update :verify_resend_otp do
@@ -1133,7 +1185,7 @@ defmodule FastCheck.Sales.Conversation do
 
         true ->
           pending_reply = %{
-            "ciphertext" => nil,
+            "ciphertext" => Changeset.get_argument(changeset, :encrypted_reply),
             "provider_message_id" => provider_message_id,
             "status" => "reply_pending",
             "attempt_count" => 0,

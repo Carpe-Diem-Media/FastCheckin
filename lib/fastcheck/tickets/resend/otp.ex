@@ -125,6 +125,52 @@ defmodule FastCheck.Tickets.Resend.Otp do
 
   def verify(_public_id, _otp, _now, _scope), do: {:error, :invalid_or_expired}
 
+  @doc "Recovers a verified challenge only when the same OTP is presented again."
+  def recover_verified(public_id, otp, {id, %MessageCommand{} = command, email})
+      when is_binary(public_id) and is_binary(otp) do
+    case Request.normalize_email(email) do
+      {:ok, normalized} ->
+        scope = {:conversation, id, command.wa_id, Hash.email(normalized)}
+        recover_verified_in_scope(public_id, otp, scope)
+
+      _ ->
+        {:error, :invalid_or_expired}
+    end
+  end
+
+  def recover_verified(_, _, _), do: {:error, :invalid_or_expired}
+
+  defp recover_verified_in_scope(public_id, otp, scope) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    case Repo.transaction(fn ->
+           challenge = fetch_challenge(public_id)
+
+           if recoverable?(challenge, scope, now) and
+                secure_match?(challenge.otp_hash, Hash.otp(public_id, otp)) do
+             get_challenge!(challenge.id)
+           else
+             Repo.rollback(:invalid_or_expired)
+           end
+         end) do
+      {:ok, challenge} -> {:ok, challenge}
+      _ -> {:error, :invalid_or_expired}
+    end
+  end
+
+  defp recoverable?(nil, _scope, _now), do: false
+
+  defp recoverable?(challenge, scope, now) do
+    valid_scope?(challenge, scope) and challenge.status == "verified" and
+      is_nil(challenge.request_name_hash) and is_nil(challenge.consumed_at) and
+      consistent_binding?(challenge) and DateTime.compare(challenge.expires_at, now) == :gt
+  end
+
+  defp consistent_binding?(%{ticket_issue_id: nil, sales_order_id: nil}), do: true
+
+  defp consistent_binding?(%{ticket_issue_id: ticket, sales_order_id: order}),
+    do: is_integer(ticket) and is_integer(order)
+
   defp verify_with_scope(public_id, otp, now, scope)
        when is_binary(public_id) and is_binary(otp) do
     Repo.transaction(fn ->
@@ -268,6 +314,56 @@ defmodule FastCheck.Tickets.Resend.Otp do
   end
 
   defp bind_verified(_challenge, _ticket_id, _now), do: {:error, :invalid_or_expired}
+
+  @doc "Expires an unused challenge belonging to the trusted conversation."
+  def expire(public_id, {id, %MessageCommand{} = command, _email}) do
+    Repo.transaction(fn ->
+      case fetch_challenge(public_id) do
+        nil ->
+          :ok
+
+        challenge ->
+          scoped =
+            challenge.conversation_id == id and is_binary(command.wa_id) and
+              Repo.one(
+                from c in "sales_conversations",
+                  where: c.id == ^id and c.wa_id == ^command.wa_id,
+                  lock: "FOR SHARE",
+                  select: c.id
+              ) == id
+
+          expire_if_scoped(challenge, scoped)
+      end
+    end)
+  end
+
+  def expire(_, _), do: {:error, :invalid_or_expired}
+
+  defp expire_if_scoped(_challenge, false), do: Repo.rollback(:invalid_or_expired)
+
+  defp expire_if_scoped(challenge, true) do
+    if challenge.status in ["pending", "verified"] and not dispatch_in_flight?(challenge.id) do
+      mark_expired!(challenge.id, DateTime.utc_now() |> DateTime.truncate(:second))
+    end
+
+    :ok
+  end
+
+  defp dispatch_in_flight?(challenge_id) do
+    Repo.exists?(
+      from d in "sales_delivery_attempts",
+        where:
+          d.ticket_resend_challenge_id == ^challenge_id and
+            (d.status in [
+               "dispatching",
+               "provider_accepted",
+               "sent",
+               "delivered",
+               "read",
+               "manual_review"
+             ] or not is_nil(d.provider_message_id))
+    )
+  end
 
   @spec generate_code(pos_integer() | nil) :: binary()
   def generate_code(length \\ nil) do

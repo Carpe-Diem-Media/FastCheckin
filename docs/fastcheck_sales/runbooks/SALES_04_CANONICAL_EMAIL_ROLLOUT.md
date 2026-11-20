@@ -1,0 +1,11 @@
+# SALES-04 canonical email rollout
+
+This procedure requires separate owner authorization for the target environment. Keep `WHATSAPP_INBOUND_QUEUE_ENABLED=false` before migration and throughout reconciliation. Do not enable customer resend until every step succeeds and the deployment owner records the result. Existing delivery and merge gates still apply.
+
+1. Deploy the migration and the server-owned Order write together while inbound processing is disabled. The migration adds a nullable canonical key; it does not backfill or change the raw address.
+2. Run `FastCheck.Tickets.Resend.CanonicalEmailBackfill.batch(cursor, limit)` in the authorized environment, starting at cursor `0` and using a limit no greater than 500. Persist `next_id` and continue until `done?` is true. Record aggregate counts only. A conflict means the source or key changed during the batch; perform another complete pass. Do not log addresses, canonical keys or query rows.
+3. Repeat from cursor `0` until a complete pass reports zero updates and zero conflicts. Investigate invalid counts without printing addresses. Missing or invalid emails on eligible issued tickets keep discovery unavailable: resolve these through an independently authorized data process. Do not guess an address or set a canonical key by hand.
+4. Confirm `FastCheck.Tickets.Resend.Eligibility.canonical_coverage_complete?/0` returns true, and verify authoritative write paths are exclusively the reviewed Order action. Repeat reconciliation and coverage verification if writes or imports outside that action occur. Record the deployed commit, environment, counts, verification time and responsible operator without customer data.
+5. Only after coverage and write consistency are verified may the owner separately authorize enabling the existing WhatsApp inbound control. The code also fails closed when eligible orders have null canonical keys. The null-key check alone does not prove non-null keys are consistent with raw emails; the reconciliation and write-control checks are mandatory.
+
+Never run this procedure against local, shared or production databases without explicit authorization for that environment. Backfill source and tests do not authorize execution or activation.

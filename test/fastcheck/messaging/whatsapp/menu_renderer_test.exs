@@ -216,6 +216,20 @@ defmodule FastCheck.Messaging.WhatsApp.MenuRendererTest do
       assert MenuRenderer.resend_locked_otp_prompt("en") =~ "Too many attempts"
     end
 
+    test "choice codes remain copyable in English and Afrikaans within the text limit" do
+      code = "FC-abcdefghijklmnopqrstuv"
+
+      for language <- ["en", "af"] do
+        body = MenuRenderer.resend_choices(language, [{"Event - Guest", code}])
+        assert body =~ "1. Event - Guest  " <> code
+        assert String.length(body) <= 4096
+        assert body =~ "0. "
+      end
+
+      assert MenuRenderer.resend_choices("en", [{"Event - Guest", code}]) =~ "Copy and send"
+      assert MenuRenderer.resend_choices("af", [{"Event - Guest", code}]) =~ "Kopieer en stuur"
+    end
+
     test "renders verified resend prompt with restart-only navigation" do
       body = MenuRenderer.resend_verified_prompt("en")
 

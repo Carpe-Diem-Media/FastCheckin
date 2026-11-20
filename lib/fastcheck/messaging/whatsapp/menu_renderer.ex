@@ -178,6 +178,13 @@ defmodule FastCheck.Messaging.WhatsApp.MenuRenderer do
       [Copy.text(language, :email), render_options_block(navigation_lines(language))]
       |> Enum.join("\n")
 
+  def resend_choices(language, labels) do
+    rows = Enum.map(labels, fn {label, code} -> %{label: label <> "  " <> code} end)
+    render_options(language, Copy.text(language, :resend_choices), rows)
+  end
+
+  def resend_help(language), do: Copy.text(language, :resend_help)
+
   @spec resend_name_prompt(String.t() | nil) :: String.t()
   def resend_name_prompt(language),
     do:

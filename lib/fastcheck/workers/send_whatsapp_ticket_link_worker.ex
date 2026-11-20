@@ -31,6 +31,9 @@ defmodule FastCheck.Workers.SendWhatsAppTicketLinkWorker do
   alias FastCheck.Sales.TicketPage
   alias FastCheck.Sales.TicketResendChallenge
   alias FastCheck.Tickets.DeliveryToken
+  alias FastCheck.Tickets.Resend.Eligibility
+  alias FastCheck.Tickets.Resend.Hash
+  alias FastCheck.Tickets.Resend.Request
 
   @intent_terminal_states ["provider_accepted", "fallback_required", "cancelled"]
   @attempt_acceptance_states ["provider_accepted", "sent", "delivered", "read"]
@@ -151,6 +154,8 @@ defmodule FastCheck.Workers.SendWhatsAppTicketLinkWorker do
   end
 
   defp prepare_new_attempt(intent) do
+    lock_resend_challenge(intent)
+
     with {:ok, bundle} <- load_and_validate_bundle(intent),
          decision <- DeliveryPolicy.select_ticket_delivery(bundle.conversation),
          {:ok, attempt} <- create_delivery_attempt(intent, bundle, decision),
@@ -167,6 +172,14 @@ defmodule FastCheck.Workers.SendWhatsAppTicketLinkWorker do
         Repo.rollback(reason)
     end
   end
+
+  defp lock_resend_challenge(%{purpose: "verified_ticket_resend", ticket_resend_challenge_id: id})
+       when is_integer(id) do
+    Repo.query!("SELECT id FROM sales_ticket_resend_challenges WHERE id = $1 FOR UPDATE", [id])
+    :ok
+  end
+
+  defp lock_resend_challenge(_intent), do: :ok
 
   defp cancel_unsafe_intent(intent, reason) do
     case mark_intent_cancelled(intent, reason) do
@@ -213,6 +226,7 @@ defmodule FastCheck.Workers.SendWhatsAppTicketLinkWorker do
          {:ok, _ticket_issue} <- rotate_token(bundle.ticket_issue, token),
          :ok <- ensure_secure_page_valid(token.token),
          url <- ticket_url(token.token),
+         :ok <- recheck_before_send(bundle.intent),
          result <- deliver(attempt, bundle.conversation, bundle.decision, url),
          :ok <- persist_provider_result(result, attempt, bundle.intent, job) do
       :ok
@@ -230,6 +244,15 @@ defmodule FastCheck.Workers.SendWhatsAppTicketLinkWorker do
 
       other ->
         other
+    end
+  end
+
+  defp recheck_before_send(%{purpose: "initial_ticket_delivery"}), do: :ok
+
+  defp recheck_before_send(intent) do
+    case load_and_validate_bundle(intent) do
+      {:ok, _bundle} -> :ok
+      _ -> {:error, :ticket_not_deliverable}
     end
   end
 
@@ -561,12 +584,26 @@ defmodule FastCheck.Workers.SendWhatsAppTicketLinkWorker do
   defp valid_resend_challenge?(intent, %TicketResendChallenge{} = challenge) do
     intent.ticket_resend_challenge_id == challenge.id and
       challenge.status == "verified" and is_nil(challenge.consumed_at) and
+      not is_nil(challenge.expires_at) and
+      DateTime.compare(challenge.expires_at, DateTime.utc_now()) == :gt and
       challenge.conversation_id == intent.conversation_id and
       challenge.sales_order_id == intent.sales_order_id and
-      challenge.ticket_issue_id == intent.ticket_issue_id
+      challenge.ticket_issue_id == intent.ticket_issue_id and
+      is_integer(challenge.ticket_issue_id) and eligible_resend?(challenge)
   end
 
   defp valid_resend_challenge?(_intent, _challenge), do: false
+
+  defp eligible_resend?(challenge) do
+    with %{sales_order_id: order_id, buyer_email: email} <-
+           Eligibility.find_eligible_ticket(challenge.ticket_issue_id),
+         {:ok, normalized} <- Request.normalize_email(email) do
+      order_id == challenge.sales_order_id and
+        Hash.email(normalized) == challenge.request_email_hash
+    else
+      _ -> false
+    end
+  end
 
   defp maybe_load_resend_challenge(%{
          purpose: "initial_ticket_delivery",

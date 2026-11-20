@@ -59,6 +59,10 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
     "order_public_reference"
   ]
   @resend_flow_keys [
+    "resend_candidates",
+    "resend_candidates_presented_at",
+    "resend_snapshot",
+    "resend_challenge_expires_at",
     "resend_name",
     "resend_email",
     "resend_requested_at",
@@ -160,9 +164,11 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
   end
 
   defp recover_to_menu(command, conversation, notice \\ nil) do
-    case ActiveCommercialOrder.find_active_order(conversation) do
-      {:ok, order} -> render_recovery_menu(command, conversation, order, notice)
-      {:error, reason} -> recovery_lookup_failed(command, conversation, reason)
+    with {:ok, :ok} <- ResendFlow.expire(command, conversation) do
+      case ActiveCommercialOrder.find_active_order(conversation) do
+        {:ok, order} -> render_recovery_menu(command, conversation, order, notice)
+        {:error, reason} -> recovery_lookup_failed(command, conversation, reason)
+      end
     end
   end
 
@@ -270,7 +276,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
         with {:ok, conversation} <-
                transition(command, conversation, :choose_resend_ticket, %{state_data: data}) do
           {:ok,
-           result(conversation, MenuRenderer.resend_name_prompt(language(conversation)), command)}
+           result(conversation, MenuRenderer.resend_email_prompt(language(conversation)), command)}
         end
 
       input == {:ok, {:number, 4}} ->
@@ -346,6 +352,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
               "collecting_resend_name",
               "collecting_resend_email",
               "collecting_resend_otp",
+              "selecting_resend_ticket",
               "awaiting_verified_resend_delivery",
               "verified_resend_delivery_queued"
             ],
@@ -382,6 +389,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
          "collecting_resend_name",
          "collecting_resend_email",
          "collecting_resend_otp",
+         "selecting_resend_ticket",
          "awaiting_verified_resend_delivery",
          "verified_resend_delivery_queued"
        ] do
@@ -423,10 +431,12 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
               "collecting_resend_name",
               "collecting_resend_email",
               "collecting_resend_otp",
+              "selecting_resend_ticket",
               "awaiting_verified_resend_delivery",
               "verified_resend_delivery_queued"
             ] do
-    with {:ok, conversation} <-
+    with {:ok, :ok} <- ResendFlow.expire(command, conversation),
+         {:ok, conversation} <-
            transition(command, conversation, :cancel_conversation, %{
              reason: "customer_stop_command",
              state_data: clear_current_flow(state_data(conversation))
@@ -510,7 +520,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
              state_data: clear_current_flow(state_data(conversation))
            }) do
       {:ok,
-       result(conversation, MenuRenderer.resend_name_prompt(language(conversation)), command)}
+       result(conversation, MenuRenderer.resend_email_prompt(language(conversation)), command)}
     end
   end
 
@@ -786,40 +796,14 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
     end
   end
 
-  defp dispatch(command, conversation, {:ok, {:text, name}})
-       when conversation.state == "collecting_resend_name" do
-    case ResendFlow.normalize_name(name) do
-      {:ok, normalized_name} ->
-        data =
-          conversation
-          |> state_data()
-          |> clear_after_resend_name()
-          |> Map.put("resend_name", normalized_name)
-
-        with {:ok, conversation} <-
-               transition(command, conversation, :submit_resend_name, %{state_data: data}) do
-          {:ok,
-           result(conversation, MenuRenderer.resend_email_prompt(language(conversation)), command)}
-        end
-
-      {:error, :invalid_name} ->
-        repeat_resend_name_prompt(command, conversation)
-    end
-  end
-
   defp dispatch(command, conversation, _normalized)
        when conversation.state == "collecting_resend_name" do
-    repeat_resend_name_prompt(command, conversation)
-  end
-
-  defp dispatch(command, conversation, {:ok, :back})
-       when conversation.state == "collecting_resend_email" do
     with {:ok, conversation} <-
-           transition(command, conversation, :return_to_resend_name_collection, %{
+           transition(command, conversation, :submit_resend_name, %{
              state_data: clear_after_resend_name(state_data(conversation))
            }) do
       {:ok,
-       result(conversation, MenuRenderer.resend_name_prompt(language(conversation)), command)}
+       result(conversation, MenuRenderer.resend_email_prompt(language(conversation)), command)}
     end
   end
 
@@ -862,17 +846,6 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
      )}
   end
 
-  defp dispatch(command, conversation, {:ok, :back})
-       when conversation.state == "collecting_resend_otp" do
-    with {:ok, conversation} <-
-           transition(command, conversation, :return_to_resend_email_collection, %{
-             state_data: clear_after_resend_email(state_data(conversation))
-           }) do
-      {:ok,
-       result(conversation, MenuRenderer.resend_email_prompt(language(conversation)), command)}
-    end
-  end
-
   defp dispatch(command, conversation, _normalized)
        when conversation.state == "collecting_resend_otp" do
     case ResendFlow.verify_email_otp(command, conversation) do
@@ -898,6 +871,20 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
            command
          )}
     end
+  end
+
+  defp dispatch(command, conversation, {:ok, {:text, code}})
+       when conversation.state == "selecting_resend_ticket" do
+    case bind_choice(command, conversation, code) do
+      {:ok, {:bound, updated}} -> queue_verified_resend_delivery(command, updated)
+      {:ok, {:expired, updated}} -> resend_help(command, updated)
+      _ -> selection_failed(command, conversation)
+    end
+  end
+
+  defp dispatch(command, conversation, _normalized)
+       when conversation.state == "selecting_resend_ticket" do
+    resend_help(command, conversation)
   end
 
   defp dispatch(command, conversation, {:ok, :back})
@@ -1140,17 +1127,102 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
     end
   end
 
-  defp repeat_resend_name_prompt(command, conversation) do
-    {:ok,
-     result(
-       conversation,
-       MenuRenderer.invalid_input(
-         language(conversation),
-         MenuRenderer.resend_name_prompt(language(conversation))
-       ),
-       command
-     )}
+  defp selection_failed(command, conversation) do
+    case Conversation
+         |> Query.for_read(:get_by_id, %{id: conversation.id})
+         |> Ash.read_one(authorize?: false) do
+      {:ok, %Conversation{} = fresh} ->
+        if fresh.state == "verified_resend_delivery_queued" do
+          {:ok, result(fresh, TicketLinkRenderer.sending_now(language(fresh)), command)}
+        else
+          resend_help(command, fresh)
+        end
+
+      _ ->
+        {:error, :invalid_selection}
+    end
   end
+
+  defp bind_choice(command, conversation, code) do
+    if Regex.match?(~r/\AFC-[A-Za-z0-9_-]{22}\z/, code) do
+      Repo.transaction(fn ->
+        Repo.query!("SELECT id FROM sales_conversations WHERE id = $1 FOR UPDATE", [
+          conversation.id
+        ])
+
+        fresh =
+          Conversation
+          |> Query.for_read(:get_by_id, %{id: conversation.id})
+          |> Ash.read_one!(authorize?: false)
+
+        data = state_data(fresh)
+        snapshot = data["resend_snapshot"] || %{}
+        digest = choice_digest(data["resend_challenge_public_id"], code)
+        ticket = get_in(snapshot, ["choices", digest])
+
+        valid =
+          fresh.state == "selecting_resend_ticket" and fresh.wa_id == command.wa_id and
+            snapshot["status"] == "active" and
+            snapshot["challenge"] == data["resend_challenge_public_id"] and is_integer(ticket)
+
+        cond do
+          valid and snapshot_expired?(snapshot) ->
+            with {:ok, :ok} <- ResendFlow.expire(command, fresh),
+                 data <- Map.put(data, "resend_snapshot", %{"status" => "expired"}),
+                 {:ok, updated} <-
+                   transition(command, fresh, :expire_resend_snapshot, %{state_data: data}) do
+              {:expired, updated}
+            else
+              _ -> Repo.rollback(:invalid_selection)
+            end
+
+          valid ->
+            with {:ok, _} <- ResendFlow.bind(command, fresh, ticket),
+                 data <- Map.put(data, "resend_snapshot", %{"status" => "consumed"}),
+                 {:ok, updated} <-
+                   transition(command, fresh, :bind_resend_ticket, %{state_data: data}) do
+              {:bound, updated}
+            else
+              _ -> Repo.rollback(:invalid_selection)
+            end
+
+          true ->
+            Repo.rollback(:invalid_selection)
+        end
+      end)
+    else
+      {:error, :invalid_selection}
+    end
+  end
+
+  defp snapshot_expired?(%{"challenge" => challenge}) when is_binary(challenge) do
+    case Repo.query!(
+           "SELECT status, expires_at FROM sales_ticket_resend_challenges WHERE public_id = $1 FOR UPDATE",
+           [challenge],
+           log: false
+         ).rows do
+      [["expired", _]] ->
+        true
+
+      [[_, %DateTime{} = expires_at]] ->
+        DateTime.compare(expires_at, DateTime.utc_now()) != :gt
+
+      [[_, %NaiveDateTime{} = expires_at]] ->
+        DateTime.compare(DateTime.from_naive!(expires_at, "Etc/UTC"), DateTime.utc_now()) != :gt
+
+      _ ->
+        true
+    end
+  end
+
+  defp snapshot_expired?(_), do: true
+
+  defp choice_digest(challenge, code) when is_binary(challenge) do
+    :crypto.hash(:sha256, "resend-choice:" <> challenge <> ":" <> code)
+    |> Base.encode16(case: :lower)
+  end
+
+  defp choice_digest(_, _), do: ""
 
   defp confirm_menu(conversation) do
     data = state_data(conversation)
@@ -1166,16 +1238,124 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
     })
   end
 
-  defp verify_resend_otp(command, conversation, updates) when is_map(updates) do
-    data =
-      conversation
-      |> state_data()
-      |> Map.merge(updates)
+  defp verify_resend_otp(command, conversation, %{"resend_bound_ticket_id" => ticket} = updates) do
+    if ResendFlow.canonical_coverage_complete?() do
+      case ResendFlow.bind(command, conversation, ticket) do
+        {:ok, _} ->
+          data =
+            Map.merge(state_data(conversation), Map.delete(updates, "resend_bound_ticket_id"))
 
-    with {:ok, conversation} <-
-           transition(command, conversation, :verify_resend_otp, %{state_data: data}) do
-      queue_verified_resend_delivery(command, conversation)
+          with {:ok, updated} <-
+                 transition(command, conversation, :verify_resend_otp, %{state_data: data}) do
+            queue_verified_resend_delivery(command, updated)
+          end
+
+        _ ->
+          resend_help(command, conversation)
+      end
+    else
+      resend_help(command, conversation)
     end
+  end
+
+  defp verify_resend_otp(command, conversation, updates) when is_map(updates) do
+    candidates = resend_candidates(conversation)
+    data = Map.merge(state_data(conversation), updates)
+
+    case candidates do
+      [candidate] ->
+        case ResendFlow.bind(command, conversation, candidate["id"]) do
+          {:ok, _} ->
+            with {:ok, conversation} <-
+                   transition(command, conversation, :verify_resend_otp, %{state_data: data}) do
+              queue_verified_resend_delivery(command, conversation)
+            end
+
+          _ ->
+            resend_help(command, conversation)
+        end
+
+      candidates when length(candidates) in 2..9 ->
+        labels = Enum.map(candidates, & &1["label"])
+
+        if Enum.uniq(labels) == labels and Enum.all?(labels, &(&1 != "")) do
+          choices =
+            Enum.map(candidates, fn candidate ->
+              code = "FC-" <> Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
+              {candidate, code}
+            end)
+
+          body =
+            MenuRenderer.resend_choices(
+              language(conversation),
+              Enum.map(choices, fn {candidate, code} -> {candidate["label"], code} end)
+            )
+
+          challenge = data["resend_challenge_public_id"]
+
+          mapping =
+            Map.new(choices, fn {candidate, code} ->
+              {choice_digest(challenge, code), candidate["id"]}
+            end)
+
+          snapshot = %{
+            "status" => "active",
+            "challenge" => challenge,
+            "choices" => mapping,
+            "expires_at" => data["resend_challenge_expires_at"]
+          }
+
+          data = Map.put(data, "resend_snapshot", snapshot)
+
+          with true <- map_size(mapping) == length(candidates),
+               {:ok, ciphertext} <- Crypto.encrypt(body),
+               {:ok, conversation} <-
+                 transition(command, conversation, :select_resend_candidates, %{
+                   state_data: data,
+                   encrypted_reply: ciphertext
+                 }) do
+            {:ok, result(conversation, body, command)}
+          else
+            false -> resend_help(command, conversation)
+            {:error, reason} -> {:error, reason}
+          end
+        else
+          resend_help(command, conversation)
+        end
+
+      _ ->
+        resend_help(command, conversation)
+    end
+  end
+
+  defp resend_candidates(conversation) do
+    Enum.map(ResendFlow.candidates(conversation), fn candidate ->
+      event = safe_resend_label(candidate.event_name)
+
+      name =
+        [candidate.first_name, candidate.last_name]
+        |> Enum.map(&safe_resend_label/1)
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.join(" ")
+
+      label = if event != "" and name != "", do: event <> " - " <> name, else: ""
+
+      %{"id" => candidate.ticket_issue_id, "label" => label}
+    end)
+  end
+
+  defp safe_resend_label(value) when is_binary(value) do
+    if String.contains?(value, "@") do
+      ""
+    else
+      value |> String.replace(~r/[\r\n\p{C}`|]/u, " ") |> String.trim() |> String.slice(0, 80)
+    end
+  end
+
+  defp safe_resend_label(_), do: ""
+
+  defp resend_help(command, conversation) do
+    {:ok, result(conversation, MenuRenderer.resend_help(language(conversation)), command)}
   end
 
   defp handle_already_verified_resend_otp(command, conversation) do
@@ -1221,7 +1401,10 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
     |> Map.take([
       "resend_otp_verified_at",
       "resend_otp_verification_status",
+      "resend_snapshot",
       "recovery_resend",
+      "purchase_flow_id",
+      "payment_attempt_id",
       "sales_order_id",
       "order_public_reference"
     ])
@@ -1447,7 +1630,14 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
 
   defp unavailable_event_response(language, _notice), do: MenuRenderer.no_events(language)
 
-  defp clear_current_flow(data), do: drop_flow_keys(data, @all_flow_keys)
+  defp clear_current_flow(data) do
+    cleared = drop_flow_keys(data, @all_flow_keys)
+
+    case data["resend_snapshot"] do
+      %{"status" => "active"} -> Map.put(cleared, "resend_snapshot", %{"status" => "invalidated"})
+      _ -> cleared
+    end
+  end
 
   defp clear_after_resend_name(data), do: drop_flow_keys(data, @resend_flow_keys)
 
