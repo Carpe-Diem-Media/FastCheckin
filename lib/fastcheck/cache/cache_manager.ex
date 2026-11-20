@@ -374,7 +374,9 @@ defmodule FastCheck.Cache.CacheManager do
   Invalidates binary keys matching the pattern. `*` matches any sequence of
   characters; all other characters are literal. Empty patterns and patterns
   containing only wildcards are rejected. A successful local invalidation
-  broadcasts the pattern over PubSub for other nodes.
+  broadcasts the pattern over PubSub for other nodes. If the cache disappears
+  during invalidation, returns `{:error, :cache_unavailable}`. Keys removed
+  before a failure are not restored, and no invalidation is broadcast.
   """
   @spec invalidate_pattern(String.t()) :: cache_result(non_neg_integer())
   def invalidate_pattern(pattern) when is_binary(pattern) do
@@ -697,7 +699,7 @@ defmodule FastCheck.Cache.CacheManager do
   defp do_invalidate(pattern, origin) do
     with {:ok, matcher} <- invalidation_matcher(pattern),
          true <- cache_ready?(),
-         {:ok, count} <- invalidate_matching(matcher) do
+         {:ok, count} <- invalidate_matching_safely(matcher) do
       if origin == :local do
         PubSub.broadcast(@pubsub, config()[:pubsub_topic], {@invalidation_event, pattern})
       end
@@ -737,6 +739,57 @@ defmodule FastCheck.Cache.CacheManager do
   end
 
   defp invalidation_matcher(_pattern), do: {:error, :invalid_pattern}
+
+  defp invalidate_matching_safely(matcher) do
+    name = cache_name()
+    table = :ets.whereis(name)
+    cache_pid = Process.whereis(name)
+
+    try do
+      invalidate_matching(matcher)
+    rescue
+      error in ArgumentError ->
+        case __STACKTRACE__ do
+          [{:ets, operation, [^name | _], _} | _]
+          when operation in [:safe_fixtable, :select, :delete, :lookup] ->
+            if table == :undefined or :ets.whereis(name) != table do
+              {:error, :cache_unavailable}
+            else
+              reraise error, __STACKTRACE__
+            end
+
+          _ ->
+            reraise error, __STACKTRACE__
+        end
+    catch
+      :exit,
+      {reason, {GenServer, :call, [_pid, {:cachex_notify, {{action, _}, _}}, _timeout]}} =
+          exit_reason
+      when reason in [:shutdown, :noproc, :normal] and action in [:stream, :del, :exists?] ->
+        if table == :undefined or :ets.whereis(name) != table or
+             cache_stopped?(cache_pid) do
+          {:error, :cache_unavailable}
+        else
+          :erlang.raise(:exit, exit_reason, __STACKTRACE__)
+        end
+    end
+  end
+
+  # Cachex shuts down its hook supervisor before its ETS table. A supervisor
+  # that is stopping will exit rather than answer this request; a standalone
+  # hook crash leaves it responsive and must remain visible to the caller.
+  defp cache_stopped?(nil), do: true
+
+  defp cache_stopped?(cache_pid) do
+    GenServer.call(cache_pid, :which_children, 2_000)
+    false
+  catch
+    :exit, {reason, {GenServer, :call, _}} when reason in [:shutdown, :noproc, :normal] ->
+      true
+
+    :exit, {:timeout, {GenServer, :call, _}} ->
+      false
+  end
 
   defp invalidate_matching({:exact, key}) do
     with {:ok, exists?} <- Cachex.exists?(cache_name(), key) do
