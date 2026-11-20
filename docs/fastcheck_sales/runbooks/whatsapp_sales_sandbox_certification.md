@@ -76,9 +76,11 @@ uses `/dashboard` and its event **WhatsApp Sales** control. Dashboard routes use
 browser authentication and session revalidation; event access is grant-scoped.
 The offer page `/dashboard/events/:event_id/whatsapp-offers` also checks event
 access and offer policies. Confirm the selected synthetic event is disabled
-before setup. Create the approved offer there with the agreed synthetic details;
-the create action persists it disabled. Verify both disabled states and record
-safe evidence before the window.
+before setup. Create the approved offer there with the agreed synthetic details,
+leaving **Enable sales after inventory setup** unchecked. Creation can enable
+sales when that checkbox is selected and inventory setup succeeds. After saving,
+verify that both the resulting offer and event remain disabled, and record safe
+evidence before the window.
 
 The active-offer query checks enabled, archive, channel and time predicates.
 However, offer administration creates `starts_at` and `ends_at` as nil and
