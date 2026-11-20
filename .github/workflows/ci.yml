@@ -265,8 +265,8 @@ jobs:
       - name: Run tests
         run: |
           set -o pipefail
-          mix test test/fastcheck/tickets/resend/email_first_concurrency_test.exs test/fastcheck/tickets/resend/sales04_physical_concurrency_test.exs --include independent_db --trace | tee "$RUNNER_TEMP/sales-resend-independent-output.txt"
-          grep -Eq "^11 tests, 0 failures(, 0 skipped)?$" "$RUNNER_TEMP/sales-resend-independent-output.txt"
+          mix test test/fastcheck/tickets/resend/email_first_concurrency_test.exs test/fastcheck/tickets/resend/sales04_physical_concurrency_test.exs test/fastcheck/sales/checkout_physical_concurrency_test.exs --include independent_db --trace | tee "$RUNNER_TEMP/sales-resend-independent-output.txt"
+          grep -Eq "^12 tests, 0 failures(, 0 skipped)?$" "$RUNNER_TEMP/sales-resend-independent-output.txt"
           for name in \
             "independent connections serialize issuance by email and source" \
             "independent connections serialize OTP verification and competing ticket binds" \
@@ -278,7 +278,8 @@ jobs:
             "physical exit after selection cannot rebind or create another intent" \
             "physical selection waiting on a lock observes authoritative expiry" \
             "new selection path rejects malformed foreign source and foreign challenge codes" \
-            "physical backfill CAS observes a concurrently committed email change"; do
+            "physical backfill CAS observes a concurrently committed email change" \
+            "independent last-ticket checkouts cannot oversell while the winner waits to persist"; do
             grep -Fq "$name" "$RUNNER_TEMP/sales-resend-independent-output.txt"
           done
 
