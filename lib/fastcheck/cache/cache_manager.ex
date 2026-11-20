@@ -371,14 +371,19 @@ defmodule FastCheck.Cache.CacheManager do
   end
 
   @doc """
-  Invalidates all entries matching the provided pattern. The pattern supports
-  wildcards accepted by `Cachex.keys/2`. An invalidation message is also
-  broadcast over PubSub so all nodes drop the same entries.
+  Invalidates binary keys matching the pattern. `*` matches any sequence of
+  characters; all other characters are literal. Empty patterns and patterns
+  containing only wildcards are rejected. A successful local invalidation
+  broadcasts the pattern over PubSub for other nodes. If the cache disappears
+  during invalidation, returns `{:error, :cache_unavailable}`. Keys removed
+  before a failure are not restored, and no invalidation is broadcast.
   """
   @spec invalidate_pattern(String.t()) :: cache_result(non_neg_integer())
   def invalidate_pattern(pattern) when is_binary(pattern) do
     do_invalidate(pattern, :local)
   end
+
+  def invalidate_pattern(_pattern), do: {:error, :invalid_pattern}
 
   @doc """
   Clears the entire cache. Intended for administrative or testing purposes.
@@ -692,23 +697,113 @@ defmodule FastCheck.Cache.CacheManager do
   end
 
   defp do_invalidate(pattern, origin) do
-    if cache_ready?() do
-      case Cachex.keys(cache_name(), match: pattern) do
-        {:ok, keys} ->
-          count = delete_matching_keys(keys)
+    with {:ok, matcher} <- invalidation_matcher(pattern),
+         true <- cache_ready?(),
+         {:ok, count} <- invalidate_matching_safely(matcher) do
+      if origin == :local do
+        PubSub.broadcast(@pubsub, config()[:pubsub_topic], {@invalidation_event, pattern})
+      end
 
-          if origin == :local do
-            PubSub.broadcast(@pubsub, config()[:pubsub_topic], {@invalidation_event, pattern})
-          end
+      {:ok, count}
+    else
+      false ->
+        {:error, :cache_unavailable}
 
-          {:ok, count}
+      {:error, :invalid_pattern} = error ->
+        error
 
-        {:error, reason} ->
-          log_cache_error(:invalidate, pattern, reason)
-          {:error, reason}
+      {:error, reason} ->
+        Logger.warning("Cache invalidation failed")
+        {:error, reason}
+    end
+  end
+
+  defp invalidation_matcher(pattern) when is_binary(pattern) do
+    if String.valid?(pattern) and String.trim(pattern, "*") != "" do
+      if String.contains?(pattern, "*") do
+        expression =
+          pattern
+          |> String.split("*")
+          |> Enum.map_join(".*", &Regex.escape/1)
+
+        case Regex.compile("\\A" <> expression <> "\\z", "s") do
+          {:ok, regex} -> {:ok, {:pattern, regex}}
+          {:error, _} -> {:error, :invalid_pattern}
+        end
+      else
+        {:ok, {:exact, pattern}}
       end
     else
-      {:error, :cache_unavailable}
+      {:error, :invalid_pattern}
+    end
+  end
+
+  defp invalidation_matcher(_pattern), do: {:error, :invalid_pattern}
+
+  defp invalidate_matching_safely(matcher) do
+    name = cache_name()
+    table = :ets.whereis(name)
+    cache_pid = Process.whereis(name)
+
+    try do
+      invalidate_matching(matcher)
+    rescue
+      error in ArgumentError ->
+        case __STACKTRACE__ do
+          [{:ets, operation, [^name | _], _} | _]
+          when operation in [:safe_fixtable, :select, :delete, :lookup] ->
+            if table == :undefined or :ets.whereis(name) != table do
+              {:error, :cache_unavailable}
+            else
+              reraise error, __STACKTRACE__
+            end
+
+          _ ->
+            reraise error, __STACKTRACE__
+        end
+    catch
+      :exit,
+      {reason, {GenServer, :call, [_pid, {:cachex_notify, {{action, _}, _}}, _timeout]}} =
+          exit_reason
+      when reason in [:shutdown, :noproc, :normal] and action in [:stream, :del, :exists?] ->
+        if table == :undefined or :ets.whereis(name) != table or
+             cache_stopped?(cache_pid) do
+          {:error, :cache_unavailable}
+        else
+          :erlang.raise(:exit, exit_reason, __STACKTRACE__)
+        end
+    end
+  end
+
+  # Cachex shuts down its hook supervisor before its ETS table. A supervisor
+  # that is stopping will exit rather than answer this request; a standalone
+  # hook crash leaves it responsive and must remain visible to the caller.
+  defp cache_stopped?(nil), do: true
+
+  defp cache_stopped?(cache_pid) do
+    GenServer.call(cache_pid, :which_children, 2_000)
+    false
+  catch
+    :exit, {reason, {GenServer, :call, _}} when reason in [:shutdown, :noproc, :normal] ->
+      true
+
+    :exit, {:timeout, {GenServer, :call, _}} ->
+      false
+  end
+
+  defp invalidate_matching({:exact, key}) do
+    with {:ok, exists?} <- Cachex.exists?(cache_name(), key) do
+      if exists?, do: delete_matching_keys([key]), else: {:ok, 0}
+    end
+  end
+
+  defp invalidate_matching({:pattern, regex}) do
+    query = Cachex.Query.create(true, :key)
+
+    with {:ok, keys} <- Cachex.stream(cache_name(), query) do
+      keys
+      |> Stream.filter(&(is_binary(&1) and Regex.match?(regex, &1)))
+      |> delete_matching_keys()
     end
   end
 
@@ -739,10 +834,10 @@ defmodule FastCheck.Cache.CacheManager do
   end
 
   defp delete_matching_keys(keys) do
-    Enum.reduce(keys, 0, fn key, acc ->
+    Enum.reduce_while(keys, {:ok, 0}, fn key, {:ok, acc} ->
       case Cachex.del(cache_name(), key) do
-        {:ok, true} -> acc + 1
-        _ -> acc
+        {:ok, true} -> {:cont, {:ok, acc + 1}}
+        {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
