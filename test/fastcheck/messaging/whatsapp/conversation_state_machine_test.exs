@@ -394,6 +394,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
 
     assert result.conversation.state == "main_menu"
     assert result.response_body =~ "Daar is nie nou kaartjies beskikbaar nie"
+    assert result.response_body =~ "3. Stuur my kaartjie weer"
     refute result.response_body =~ "Voelgoed Live"
   end
 
@@ -415,6 +416,30 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
 
     assert result.conversation.state == "main_menu"
     refute result.response_body =~ event.name
+  end
+
+  test "changed event list never presents numbers with stale mappings", %{
+    conversation: conversation,
+    event: event
+  } do
+    selecting =
+      conversation
+      |> progress("hi", "changed-list-1")
+      |> progress("2", "changed-list-2")
+      |> progress("1", "changed-list-3")
+
+    assert {:ok, _} = Events.disable_whatsapp_sales(event.id)
+    {:ok, result} = handle(selecting.conversation, "invalid", "changed-list-4")
+    assert result.conversation.state == "selecting_event"
+    assert result.response_body =~ "0. Main menu"
+    refute result.response_body =~ "1."
+
+    assert result.conversation.state_data["event_options"] ==
+             selecting.conversation.state_data["event_options"]
+
+    {:ok, menu} = handle(result.conversation, "0", "changed-list-5")
+    assert menu.conversation.state == "main_menu"
+    assert menu.response_body =~ "3. Re-send my ticket"
   end
 
   test "a stale event selection is rejected after the durable gate is disabled", %{
@@ -966,6 +991,8 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
 
     assert expired_result.conversation.state == "collecting_resend_otp"
     assert expired_result.response_body =~ "ongeldig"
+    assert expired_result.response_body =~ "0. Hoofkieslys"
+    assert expired_result.response_body =~ "nuwe herstuur"
 
     for attempt <- 1..5 do
       assert {:ok, _result} =
@@ -1048,6 +1075,8 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     assert {:ok, repeated} = handle(already_waiting, "hello", "wamid.resend-already-3")
     assert repeated.conversation.state == "awaiting_verified_resend_delivery"
     assert repeated.response_body =~ "kan nie"
+    assert repeated.response_body =~ "0. Hoofkieslys"
+    assert repeated.conversation.state_data["resend_challenge_public_id"] == challenge.public_id
     refute_enqueued(worker: SendWhatsAppTicketLinkWorker)
     assert delivery_attempt_count() == 0
   end
@@ -1110,6 +1139,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     assert ordinary.conversation.state == "verified_resend_delivery_queued"
     assert ordinary.response_body =~ "gereed"
     assert ordinary.response_body =~ "stuur"
+    assert ordinary.response_body =~ "0. Hoofkieslys"
     refute ordinary.response_body =~ "betaling"
     refute ordinary.response_body =~ "payment"
     refute ordinary.response_body =~ "http://"
@@ -1590,7 +1620,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     assert result.conversation.state == "main_menu"
     assert result.conversation.needs_human
     assert result.conversation.handoff_reason == "conversation_order_mismatch"
-    assert result.response_body =~ "Antwoord met 1 om kaartjies te koop"
+    assert result.response_body =~ "geleentheidsorganiseerder"
     refute result.conversation.state_data["recovery_menu"]
     refute result.conversation.state_data["sales_order_id"]
     assert Repo.aggregate(from(o in "sales_orders"), :count, :id) == order_count_before

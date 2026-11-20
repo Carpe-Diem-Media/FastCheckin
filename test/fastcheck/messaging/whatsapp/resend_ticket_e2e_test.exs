@@ -279,6 +279,7 @@ defmodule FastCheck.Messaging.WhatsApp.ResendTicketE2ETest do
       else
         refute result.response_body =~ "Guest"
         assert result.response_body =~ "organiseerder"
+        assert result.response_body =~ "0. Hoofkieslys"
       end
     end
   end
@@ -623,6 +624,29 @@ defmodule FastCheck.Messaging.WhatsApp.ResendTicketE2ETest do
     otp = extract_single_otp_from_email!()
     {:ok, response} = handle(result.conversation, otp, "wamid.none-5")
     assert response.response_body =~ "organiseerder"
+    assert response.response_body =~ "0. Hoofkieslys"
+    refute_enqueued(worker: SendWhatsAppTicketLinkWorker)
+  end
+
+  test "ambiguous labels offer safe help without binding a ticket", %{conversation: conversation} do
+    email = "same-label@example.com"
+    first = issued_ticket_candidate!(buyer_email: email, attendee_first_name: "Guest")
+    second = issued_ticket_candidate!(buyer_email: email, attendee_first_name: "Guest")
+    event_ids = [first.event.id, second.event.id]
+    Repo.update_all(from(e in "events", where: e.id in ^event_ids), set: [name: "Shared Event"])
+
+    pending =
+      conversation
+      |> progress("hi", "same-label-1")
+      |> progress("1", "same-label-2")
+      |> progress("3", "same-label-3")
+      |> progress(email, "same-label-4")
+
+    otp = extract_single_otp_from_email!()
+    {:ok, response} = handle(pending.conversation, otp, "wamid.same-label-5")
+    assert response.response_body =~ "organiseerder"
+    assert response.response_body =~ "0. Hoofkieslys"
+    refute response.response_body =~ "FC-"
     refute_enqueued(worker: SendWhatsAppTicketLinkWorker)
   end
 

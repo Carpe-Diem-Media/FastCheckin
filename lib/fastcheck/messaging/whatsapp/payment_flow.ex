@@ -15,6 +15,7 @@ defmodule FastCheck.Messaging.WhatsApp.PaymentFlow do
   alias Ash.Query
   alias FastCheck.Messaging.WhatsApp.ActiveCommercialOrder
   alias FastCheck.Messaging.WhatsApp.FlowResult
+  alias FastCheck.Messaging.WhatsApp.MenuRenderer
   alias FastCheck.Messaging.WhatsApp.MessageCommand
   alias FastCheck.Messaging.WhatsApp.PaymentStatusRenderer
   alias FastCheck.Messaging.WhatsApp.PurchaseFlowIdentity
@@ -135,7 +136,12 @@ defmodule FastCheck.Messaging.WhatsApp.PaymentFlow do
        )}
     else
       {:error, :missing_buyer_email} ->
-        request_email(command, conversation)
+        body =
+          MenuRenderer.help(language(conversation)) <>
+            "\n\n" <>
+            MenuRenderer.status_navigation(language(conversation))
+
+        {:ok, result(conversation, body, command)}
 
       {:error, :payment_initialization_in_progress} ->
         {:ok,
@@ -168,7 +174,14 @@ defmodule FastCheck.Messaging.WhatsApp.PaymentFlow do
 
   defp respond_for_order(command, conversation, %{status: "ticket_issued"} = order) do
     with :ok <- enqueue_ticket_delivery_coordinator(order.id) do
-      {:ok, result(conversation, TicketLinkRenderer.sending_now(language(conversation)), command)}
+      {:ok,
+       result(
+         conversation,
+         TicketLinkRenderer.sending_now(language(conversation)) <>
+           "\n\n" <>
+           MenuRenderer.status_navigation(language(conversation)),
+         command
+       )}
     end
   end
 

@@ -220,6 +220,48 @@ defmodule FastCheck.Messaging.WhatsApp.PaymentFlowTest do
     assert_enqueued(worker: SendWhatsAppPaymentLinkWorker)
   end
 
+  test "an existing order without email offers help without asking for an unusable update", %{
+    event: event,
+    offer: offer
+  } do
+    conversation = insert_conversation!(state: "awaiting_payment", state_data: %{})
+
+    {:ok, %{order: order}} =
+      Checkout.start_checkout(
+        SalesFixtures.checkout_input(%{
+          event_id: event.id,
+          ticket_offer_id: offer.id,
+          quantity: 1,
+          buyer_phone: "+27821234567",
+          buyer_email: "buyer@example.com",
+          source_channel: "whatsapp",
+          sales_conversation_id: conversation.id,
+          idempotency_key: "missing-email-#{conversation.id}",
+          correlation_id: "missing-email",
+          event_name: event.name
+        }),
+        %{actor_type: :customer_session, actor_id: "customer-1", allowed_event_ids: [event.id]}
+      )
+
+    Repo.update_all(from(o in "sales_orders", where: o.id == ^order.id), set: [buyer_email: nil])
+    {request_fun, counter} = PaymentSupport.flunk_paystack_request_fun()
+    Application.put_env(:fastcheck, :paystack_request_fun, request_fun)
+
+    assert {:ok, result} =
+             PaymentFlow.respond_to_status_request(
+               command("wamid.missing-order-email"),
+               conversation
+             )
+
+    assert result.conversation.state == "awaiting_payment"
+    assert result.conversation.state_data["sales_order_id"] == order.id
+    assert result.response_body =~ "geleentheidsorganiseerder"
+    assert result.response_body =~ "0. Hoofkieslys"
+    refute result.response_body =~ "Stuur asseblief jou e-posadres"
+    assert :counters.get(counter, 1) == 0
+    refute_enqueued(worker: SendWhatsAppPaymentLinkWorker)
+  end
+
   test "ticket_issued status says secure ticket link is being sent", %{event: event} do
     %{order_id: order_id} = issued_ticket_fixture(event)
 
