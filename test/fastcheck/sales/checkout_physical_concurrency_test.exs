@@ -26,7 +26,13 @@ defmodule FastCheck.Sales.CheckoutPhysicalConcurrencyTest do
       unboxed(fn ->
         event = FastCheck.Fixtures.create_event()
         {:ok, _} = FastCheck.Events.enable_whatsapp_sales(event.id)
-        offer = Fixtures.insert_offer!(event_id: event.id, configured_quantity_available: 1)
+
+        offer =
+          Fixtures.insert_offer!(
+            event_id: event.id,
+            configured_quantity_available: 1,
+            max_per_order: 1
+          )
 
         inputs =
           for _ <- 1..2 do
