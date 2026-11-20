@@ -102,6 +102,16 @@ defmodule FastCheck.Messaging.WhatsApp.MenuRenderer do
     render_options(language, Copy.text(language, :choose_event), events)
   end
 
+  @spec event_list_changed(String.t() | nil) :: String.t()
+  def event_list_changed(language) do
+    notice =
+      if language == "en",
+        do: "The event list has changed. Choose 0 to return to the main menu.",
+        else: "Die geleentheidslys het verander. Kies 0 om na die hoofkieslys terug te keer."
+
+    notice <> "\n" <> render_options_block(navigation_lines(language))
+  end
+
   @spec offer_menu(String.t() | nil, [map()]) :: String.t()
   def offer_menu(language, offers) do
     render_offer_options(language, Copy.text(language, :choose_ticket_type), offers)
@@ -183,7 +193,10 @@ defmodule FastCheck.Messaging.WhatsApp.MenuRenderer do
     render_options(language, Copy.text(language, :resend_choices), rows)
   end
 
-  def resend_help(language), do: Copy.text(language, :resend_help)
+  def resend_help(language),
+    do:
+      Copy.text(language, :resend_help) <>
+        "\n\n" <> render_options_block(navigation_lines(language))
 
   @spec resend_name_prompt(String.t() | nil) :: String.t()
   def resend_name_prompt(language),
@@ -234,10 +247,11 @@ defmodule FastCheck.Messaging.WhatsApp.MenuRenderer do
   def awaiting_payment(language), do: Copy.text(language, :awaiting_payment)
 
   @spec payment_pending(String.t() | nil) :: String.t()
-  def payment_pending(language), do: Copy.text(language, :payment_pending)
+  def payment_pending(language),
+    do: Copy.text(language, :payment_pending) <> "\n\n" <> status_navigation(language)
 
   @spec no_events(String.t() | nil) :: String.t()
-  def no_events(language), do: Copy.text(language, :no_events)
+  def no_events(language), do: Copy.text(language, :no_events) <> "\n\n" <> main_menu(language)
 
   @spec whatsapp_sales_unavailable(String.t() | nil) :: String.t()
   def whatsapp_sales_unavailable(language),

@@ -181,6 +181,100 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     assert Repo.aggregate(from(o in "sales_orders"), :count) == 1
   end
 
+  test "payment link timeout retains the order when the customer returns to the menu", %{
+    conversation: conversation,
+    offer: offer
+  } do
+    whatsapp_cleanup = WebhookTestSupport.setup_whatsapp!()
+    on_exit(whatsapp_cleanup)
+    Application.put_env(:fastcheck, :paystack_request_fun, PaymentSupport.success_request_fun())
+
+    pending =
+      conversation
+      |> progress("hi", "timeout-1")
+      |> progress("1", "timeout-2")
+      |> progress("1", "timeout-3")
+      |> progress("1", "timeout-4")
+      |> progress("1", "timeout-5")
+      |> progress("1", "timeout-6")
+      |> progress("Test Buyer", "timeout-7")
+      |> progress("buyer@example.com", "timeout-8")
+      |> progress("1", "timeout-9")
+
+    data = pending.conversation.state_data
+    order_id = data["sales_order_id"]
+    payment_id = data["payment_attempt_id"]
+    order_before = commercial_order_snapshot(order_id)
+    assert {:ok, inventory_before} = ReservationLedger.get_availability(offer.id)
+    payment_count = Repo.aggregate(from(p in "sales_payment_attempts"), :count)
+    order_count = Repo.aggregate(from(o in "sales_orders"), :count)
+
+    session_before =
+      Repo.one!(
+        from s in "sales_checkout_sessions",
+          where: s.sales_order_id == ^order_id,
+          select: map(s, [:id, :status, :hold_quantity, :expires_at])
+      )
+
+    jobs_before = length(all_enqueued(worker: SendWhatsAppPaymentLinkWorker))
+    counter = :counters.new(1, [])
+
+    Application.put_env(:fastcheck, :whatsapp_request_fun, fn _request ->
+      :counters.add(counter, 1, 1)
+      {:error, %Req.TransportError{reason: :timeout}}
+    end)
+
+    args = %{
+      "conversation_id" => pending.conversation.id,
+      "sales_order_id" => order_id,
+      "payment_attempt_id" => payment_id
+    }
+
+    assert {:discard, :manual_review} = perform_job(SendWhatsAppPaymentLinkWorker, args)
+    assert :counters.get(counter, 1) == 1
+
+    assert ["manual_review"] =
+             Repo.all(
+               from(d in "sales_delivery_attempts",
+                 where: d.sales_order_id == ^order_id,
+                 select: d.status
+               )
+             )
+
+    {paystack_fun, paystack_counter} = PaymentSupport.flunk_paystack_request_fun()
+    Application.put_env(:fastcheck, :paystack_request_fun, paystack_fun)
+    assert pending.response_body =~ "0. Hoofkieslys"
+    assert {:ok, menu} = handle(pending.conversation, "0", "wamid.timeout-menu")
+    assert menu.conversation.state == "main_menu"
+    assert menu.conversation.state_data["sales_order_id"] == order_id
+    assert menu.conversation.state_data["payment_attempt_id"] == payment_id
+    assert menu.conversation.state_data["purchase_flow_id"] == data["purchase_flow_id"]
+
+    assert menu.conversation.state_data["order_public_reference"] ==
+             data["order_public_reference"]
+
+    assert commercial_order_snapshot(order_id) == order_before
+    assert Repo.aggregate(from(o in "sales_orders"), :count) == order_count
+    assert Repo.aggregate(from(p in "sales_payment_attempts"), :count) == payment_count
+
+    assert Repo.one!(
+             from s in "sales_checkout_sessions",
+               where: s.sales_order_id == ^order_id,
+               select: map(s, [:id, :status, :hold_quantity, :expires_at])
+           ) == session_before
+
+    assert Repo.aggregate(
+             from(d in "sales_delivery_attempts", where: d.sales_order_id == ^order_id),
+             :count
+           ) == 1
+
+    assert {:ok, inventory_after} = ReservationLedger.get_availability(offer.id)
+    assert inventory_after == inventory_before
+    assert length(all_enqueued(worker: SendWhatsAppPaymentLinkWorker)) == jobs_before
+    assert :counters.get(counter, 1) == 1
+    assert :counters.get(paystack_counter, 1) == 0
+  end
+
   test "disabled offer at confirmation returns customer to refreshed offer selection", %{
     conversation: conversation,
     event: event,
@@ -231,6 +325,63 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
              0
 
     assert Repo.aggregate(from(pa in "sales_payment_attempts", select: count()), :count, :id) == 0
+    refute_enqueued(worker: SendWhatsAppPaymentLinkWorker)
+  end
+
+  test "an expired sales window returns to a usable offer menu without creating an order", %{
+    conversation: conversation,
+    event: event,
+    offer: offer
+  } do
+    alternative = SalesFixtures.insert_offer!(event_id: event.id, name: "Alternative")
+    on_exit(fn -> SalesFixtures.flush_inventory_keys(alternative.id) end)
+
+    offers =
+      conversation
+      |> progress("hi", "window-1")
+      |> progress("1", "window-2")
+      |> progress("1", "window-3")
+      |> progress("1", "window-4")
+
+    offer_choice =
+      Enum.find_value(offers.conversation.state_data["offer_options"], fn {key, id} ->
+        if id == offer.id, do: key
+      end)
+
+    confirming =
+      offers
+      |> progress(offer_choice, "window-5")
+      |> progress("1", "window-6")
+      |> progress("Test Buyer", "window-7")
+      |> progress("buyer@example.com", "window-8")
+
+    assert confirming.conversation.state_data["selected_offer_id"] == offer.id
+    flow_id = confirming.conversation.state_data["purchase_flow_id"]
+    ended_at = DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.truncate(:second)
+
+    Repo.update_all(from(o in "sales_ticket_offers", where: o.id == ^offer.id),
+      set: [ends_at: ended_at]
+    )
+
+    assert {:ok, inventory_before} = ReservationLedger.get_availability(offer.id)
+    {request_fun, counter} = PaymentSupport.flunk_paystack_request_fun()
+    Application.put_env(:fastcheck, :paystack_request_fun, request_fun)
+
+    assert {:ok, refreshed} = handle(confirming.conversation, "1", "window-9")
+    assert refreshed.conversation.state == "selecting_ticket_type"
+    assert refreshed.response_body =~ "Alternative"
+    assert refreshed.response_body =~ "0. Hoofkieslys"
+    assert refreshed.conversation.state_data["purchase_flow_id"] == flow_id
+    assert refreshed.conversation.state_data["offer_options"] == %{"1" => alternative.id}
+    assert {:ok, selected} = handle(refreshed.conversation, "1", "window-10")
+    assert selected.conversation.state_data["selected_offer_id"] == alternative.id
+    assert selected.conversation.state_data["purchase_flow_id"] == flow_id
+    assert Repo.aggregate(from(o in "sales_orders"), :count) == 0
+    assert Repo.aggregate(from(s in "sales_checkout_sessions"), :count) == 0
+    assert Repo.aggregate(from(p in "sales_payment_attempts"), :count) == 0
+    assert {:ok, inventory_after} = ReservationLedger.get_availability(offer.id)
+    assert inventory_after == inventory_before
+    assert :counters.get(counter, 1) == 0
     refute_enqueued(worker: SendWhatsAppPaymentLinkWorker)
   end
 
@@ -394,6 +545,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
 
     assert result.conversation.state == "main_menu"
     assert result.response_body =~ "Daar is nie nou kaartjies beskikbaar nie"
+    assert result.response_body =~ "3. Stuur my kaartjie weer"
     refute result.response_body =~ "Voelgoed Live"
   end
 
@@ -415,6 +567,30 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
 
     assert result.conversation.state == "main_menu"
     refute result.response_body =~ event.name
+  end
+
+  test "changed event list never presents numbers with stale mappings", %{
+    conversation: conversation,
+    event: event
+  } do
+    selecting =
+      conversation
+      |> progress("hi", "changed-list-1")
+      |> progress("2", "changed-list-2")
+      |> progress("1", "changed-list-3")
+
+    assert {:ok, _} = Events.disable_whatsapp_sales(event.id)
+    {:ok, result} = handle(selecting.conversation, "invalid", "changed-list-4")
+    assert result.conversation.state == "selecting_event"
+    assert result.response_body =~ "0. Main menu"
+    refute result.response_body =~ "1."
+
+    assert result.conversation.state_data["event_options"] ==
+             selecting.conversation.state_data["event_options"]
+
+    {:ok, menu} = handle(result.conversation, "0", "changed-list-5")
+    assert menu.conversation.state == "main_menu"
+    assert menu.response_body =~ "3. Re-send my ticket"
   end
 
   test "a stale event selection is rejected after the durable gate is disabled", %{
@@ -966,6 +1142,8 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
 
     assert expired_result.conversation.state == "collecting_resend_otp"
     assert expired_result.response_body =~ "ongeldig"
+    assert expired_result.response_body =~ "0. Hoofkieslys"
+    assert expired_result.response_body =~ "nuwe herstuur"
 
     for attempt <- 1..5 do
       assert {:ok, _result} =
@@ -1048,6 +1226,8 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     assert {:ok, repeated} = handle(already_waiting, "hello", "wamid.resend-already-3")
     assert repeated.conversation.state == "awaiting_verified_resend_delivery"
     assert repeated.response_body =~ "kan nie"
+    assert repeated.response_body =~ "0. Hoofkieslys"
+    assert repeated.conversation.state_data["resend_challenge_public_id"] == challenge.public_id
     refute_enqueued(worker: SendWhatsAppTicketLinkWorker)
     assert delivery_attempt_count() == 0
   end
@@ -1110,6 +1290,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     assert ordinary.conversation.state == "verified_resend_delivery_queued"
     assert ordinary.response_body =~ "gereed"
     assert ordinary.response_body =~ "stuur"
+    assert ordinary.response_body =~ "0. Hoofkieslys"
     refute ordinary.response_body =~ "betaling"
     refute ordinary.response_body =~ "payment"
     refute ordinary.response_body =~ "http://"
@@ -1590,7 +1771,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
     assert result.conversation.state == "main_menu"
     assert result.conversation.needs_human
     assert result.conversation.handoff_reason == "conversation_order_mismatch"
-    assert result.response_body =~ "Antwoord met 1 om kaartjies te koop"
+    assert result.response_body =~ "geleentheidsorganiseerder"
     refute result.conversation.state_data["recovery_menu"]
     refute result.conversation.state_data["sales_order_id"]
     assert Repo.aggregate(from(o in "sales_orders"), :count, :id) == order_count_before
@@ -2031,15 +2212,30 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachineTest do
 
   test "multiple active Orders fail closed with a support response", %{event: event, offer: offer} do
     conversation = insert_conversation!(state: "main_menu", state_data: %{})
-    create_active_order!(conversation, event, offer, "first-active-#{conversation.id}")
-    create_active_order!(conversation, event, offer, "second-active-#{conversation.id}")
+    first = create_active_order!(conversation, event, offer, "first-active-#{conversation.id}")
+    second = create_active_order!(conversation, event, offer, "second-active-#{conversation.id}")
+    before_orders = Enum.map([first.id, second.id], &commercial_order_snapshot/1)
     before_count = Repo.one!(from(o in "sales_orders", select: count(o.id)))
+    assert {:ok, inventory_before} = ReservationLedger.get_availability(offer.id)
+    {request_fun, counter} = PaymentSupport.flunk_paystack_request_fun()
+    Application.put_env(:fastcheck, :paystack_request_fun, request_fun)
 
     assert {:ok, result} = handle(conversation, "#", "wamid.multiple-active")
-
-    assert result.response_body =~ "ondersteuning"
+    assert result.response_body =~ "geleentheidsorganiseerder"
+    assert result.response_body =~ "1. Hulp"
     assert result.conversation.state == "main_menu"
+    assert result.conversation.needs_human
+    assert result.conversation.handoff_reason == "multiple_active_commercial_orders"
+
+    assert {:ok, retry} = handle(result.conversation, "1", "wamid.multiple-active-help")
+    assert retry.conversation.state == "main_menu"
+    assert retry.conversation.handoff_reason == "multiple_active_commercial_orders"
+    assert Enum.map([first.id, second.id], &commercial_order_snapshot/1) == before_orders
     assert Repo.one!(from(o in "sales_orders", select: count(o.id))) == before_count
+    assert {:ok, inventory_after} = ReservationLedger.get_availability(offer.id)
+    assert inventory_after == inventory_before
+    assert :counters.get(counter, 1) == 0
+    refute_enqueued(worker: SendWhatsAppPaymentLinkWorker)
   end
 
   test "0 from selecting_ticket_type returns to main menu", %{

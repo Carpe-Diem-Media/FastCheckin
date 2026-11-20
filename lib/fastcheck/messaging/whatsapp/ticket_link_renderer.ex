@@ -29,10 +29,10 @@ defmodule FastCheck.Messaging.WhatsApp.TicketLinkRenderer do
 
   @spec not_deliverable(String.t() | nil) :: String.t()
   def not_deliverable("en") do
-    "We cannot send an active ticket link for this order. Please contact support."
+    "We cannot send an active ticket link for this order. Please contact the event organiser."
   end
 
   def not_deliverable(_language) do
-    "Ons kan nie 'n aktiewe kaartjieskakel vir hierdie bestelling stuur nie. Kontak asseblief ondersteuning."
+    "Ons kan nie 'n aktiewe kaartjieskakel vir hierdie bestelling stuur nie. Kontak asseblief die geleentheidsorganiseerder."
   end
 end

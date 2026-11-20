@@ -3,6 +3,34 @@ defmodule FastCheck.Messaging.WhatsApp.MenuRendererTest do
 
   alias FastCheck.Messaging.WhatsApp.MenuRenderer
 
+  test "recovery messages provide usable navigation in both languages" do
+    for {language, menu} <- [{"en", "0. Main menu"}, {"af", "0. Hoofkieslys"}] do
+      assert MenuRenderer.resend_help(language) =~ menu
+      assert MenuRenderer.resend_invalid_otp_prompt(language) =~ menu
+      assert MenuRenderer.no_events(language) =~ "3."
+    end
+
+    assert MenuRenderer.resend_invalid_otp_prompt("en") =~ "start a new resend"
+    assert MenuRenderer.resend_invalid_otp_prompt("af") =~ "nuwe herstuur"
+  end
+
+  test "payment status prompts offer guarded navigation without claiming delivery" do
+    alias FastCheck.Messaging.WhatsApp.PaymentStatusRenderer
+
+    for {language, menu} <- [{"en", "0. Main menu"}, {"af", "0. Hoofkieslys"}] do
+      for body <- [
+            PaymentStatusRenderer.payment_link_queued(language),
+            PaymentStatusRenderer.payment_pending(language),
+            PaymentStatusRenderer.ticket_preparing(language),
+            PaymentStatusRenderer.missing_email(language)
+          ] do
+        assert body =~ menu
+        refute String.downcase(body) =~ "delivered"
+        refute String.downcase(body) =~ "afgelewer"
+      end
+    end
+  end
+
   describe "language_prompt/0" do
     test "renders the Afrikaans-first language prompt" do
       body = MenuRenderer.language_prompt()

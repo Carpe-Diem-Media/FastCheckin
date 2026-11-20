@@ -49,7 +49,8 @@ defmodule FastCheck.Messaging.WhatsApp.Copy do
     do: "Gaan asseblief jou e-pos na en stuur die verifikasiekode hier."
 
   defp af(:resend_otp_invalid),
-    do: "Daardie kode is ongeldig of het verval. Gaan asseblief die kode na en probeer weer."
+    do:
+      "Daardie kode is ongeldig of het verval. Probeer weer, of kies 0 en begin 'n nuwe herstuur."
 
   defp af(:resend_otp_locked),
     do: "Te veel pogings. Wag asseblief voor jy weer probeer, of kontak ondersteuning."
@@ -92,7 +93,7 @@ defmodule FastCheck.Messaging.WhatsApp.Copy do
       "Hierdie kaartjie-aanbod het verander. Kies asseblief die huidige kaartjie weer voordat jy voortgaan."
 
   defp af(:support),
-    do: "Antwoord met 1 om kaartjies te koop, of kontak ondersteuning as jy hulp nodig het."
+    do: "Kontak asseblief die geleentheidsorganiseerder vir hulp."
 
   defp af(:cancelled), do: "Die gesprek is gekanselleer. Antwoord 0 om weer te begin."
   defp af(_key), do: "Antwoord asseblief met 'n geldige opsie."
@@ -127,7 +128,7 @@ defmodule FastCheck.Messaging.WhatsApp.Copy do
     do: "Please check your email and send the verification code here."
 
   defp en(:resend_otp_invalid),
-    do: "That code is invalid or expired. Please check the code and try again."
+    do: "That code is invalid or expired. Try again, or choose 0 and start a new resend."
 
   defp en(:resend_otp_locked),
     do: "Too many attempts. Please wait before trying again or contact support."
@@ -167,7 +168,7 @@ defmodule FastCheck.Messaging.WhatsApp.Copy do
   defp en(:offer_changed),
     do: "This ticket offer has changed. Please choose the current ticket again before continuing."
 
-  defp en(:support), do: "Reply with 1 to buy tickets, or contact support if you need help."
+  defp en(:support), do: "Please contact the event organiser for help."
   defp en(:cancelled), do: "The conversation has been cancelled. Reply 0 to start again."
   defp en(_key), do: "Please reply with a valid option."
 end

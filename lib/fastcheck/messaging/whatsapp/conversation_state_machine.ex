@@ -249,13 +249,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
         confirm_order_cancellation(command, conversation, order, input)
 
       input == {:ok, {:number, 1}} ->
-        with {:ok, response} <- PaymentFlow.respond_to_active_order(command, conversation, order) do
-          body =
-            response.response_body <>
-              "\n\n" <> MenuRenderer.status_navigation(language(conversation))
-
-          {:ok, %{response | response_body: body}}
-        end
+        PaymentFlow.respond_to_active_order(command, conversation, order)
 
       input == {:ok, {:number, 2}} and CheckoutExpiry.customer_cancellation_available?(order) ->
         data = Map.put(data, "cancel_order_id", order.id)
@@ -943,7 +937,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
 
   defp dispatch(command, conversation, _normalized)
        when conversation.state == "verified_resend_delivery_queued" do
-    {:ok, result(conversation, TicketLinkRenderer.sending_now(language(conversation)), command)}
+    {:ok, result(conversation, resend_delivery_response(conversation, :sending_now), command)}
   end
 
   defp dispatch(command, conversation, _normalized)
@@ -1056,15 +1050,17 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
   defp repeat_event_menu(command, conversation) do
     events = sellable_events()
 
-    {:ok,
-     result(
-       conversation,
-       MenuRenderer.invalid_input(
-         language(conversation),
-         MenuRenderer.event_menu(language(conversation), events)
-       ),
-       command
-     )}
+    body =
+      if option_ids(events) == state_data(conversation)["event_options"] do
+        MenuRenderer.invalid_input(
+          language(conversation),
+          MenuRenderer.event_menu(language(conversation), events)
+        )
+      else
+        MenuRenderer.event_list_changed(language(conversation))
+      end
+
+    {:ok, result(conversation, body, command)}
   end
 
   defp repeat_offer_menu(command, conversation) do
@@ -1133,7 +1129,7 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
          |> Ash.read_one(authorize?: false) do
       {:ok, %Conversation{} = fresh} ->
         if fresh.state == "verified_resend_delivery_queued" do
-          {:ok, result(fresh, TicketLinkRenderer.sending_now(language(fresh)), command)}
+          {:ok, result(fresh, resend_delivery_response(fresh, :sending_now), command)}
         else
           resend_help(command, fresh)
         end
@@ -1383,16 +1379,23 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
                  state_data: data
                }) do
           {:ok,
-           result(conversation, TicketLinkRenderer.sending_now(language(conversation)), command)}
+           result(conversation, resend_delivery_response(conversation, :sending_now), command)}
         end
 
       {:error, :not_ready} ->
-        {:ok, result(conversation, TicketLinkRenderer.not_ready(language(conversation)), command)}
+        {:ok, result(conversation, resend_delivery_response(conversation, :not_ready), command)}
 
       {:error, :not_deliverable} ->
         {:ok,
-         result(conversation, TicketLinkRenderer.not_deliverable(language(conversation)), command)}
+         result(conversation, resend_delivery_response(conversation, :not_deliverable), command)}
     end
+  end
+
+  defp resend_delivery_response(conversation, status) do
+    language = language(conversation)
+
+    apply(TicketLinkRenderer, status, [language]) <>
+      "\n\n" <> MenuRenderer.status_navigation(language)
   end
 
   defp verified_resend_delivery_state_data(conversation, updates) do
@@ -1624,8 +1627,12 @@ defmodule FastCheck.Messaging.WhatsApp.ConversationStateMachine do
     do: MenuRenderer.offer_menu(language, offers)
 
   defp unavailable_event_response(language, :whatsapp_sales_disabled) do
-    MenuRenderer.whatsapp_sales_unavailable(language) <>
-      "\n\n" <> MenuRenderer.no_events(language)
+    notice =
+      if language == "en",
+        do: "WhatsApp ticket sales for this event are temporarily unavailable.",
+        else: "WhatsApp-kaartjieverkope vir hierdie geleentheid is tans nie beskikbaar nie."
+
+    notice <> "\n\n" <> MenuRenderer.no_events(language)
   end
 
   defp unavailable_event_response(language, _notice), do: MenuRenderer.no_events(language)
