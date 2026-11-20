@@ -196,7 +196,7 @@ defmodule FastCheck.Tickets.Resend.CanonicalEmailBackfillTest do
       """
       INSERT INTO sales_orders (public_reference, event_id, buyer_email, buyer_email_canonical, source_channel, status, total_amount_cents, currency, inserted_at, updated_at)
       SELECT 'PLAN-' || $1::text || '-' || $3::integer::text || '-' || n, $2, CASE WHEN n <= 100 THEN 'plan-fanout@example.com' ELSE 'covered' || n || '@example.com' END, CASE WHEN n <= 100 THEN 'plan-fanout@example.com' ELSE 'covered' || n || '@example.com' END, 'test', 'ticket_issued', 100, 'ZAR', now(), now()
-      FROM generate_series($3, $4) AS n
+      FROM generate_series($3::integer, $4::integer) AS n
       """,
       [Integer.to_string(seed.order_id), seed.event.id, first, last]
     )
